@@ -20,6 +20,8 @@ import { SafetyApprovalModal } from './components/SafetyApprovalModal';
 import { AiConsoleModal } from './components/AiConsoleModal';
 import { ServerDetailModal } from './components/ServerDetailModal';
 import { AuditLogDrawer } from './components/AuditLogDrawer';
+import { SystemDocumentationModal } from './components/SystemDocumentationModal';
+import { LocalAirGappedModal } from './components/LocalAirGappedModal';
 
 import {
   INITIAL_SERVERS,
@@ -75,6 +77,8 @@ export default function App() {
   const [selectedServerForDetail, setSelectedServerForDetail] = useState<ServerInstance | null>(null);
   const [selectedRecForApproval, setSelectedRecForApproval] = useState<RecommendationItem | null>(null);
   const [isAuditLogDrawerOpen, setIsAuditLogDrawerOpen] = useState(false);
+  const [isDocsOpen, setIsDocsOpen] = useState(false);
+  const [isAirGappedOpen, setIsAirGappedOpen] = useState(false);
 
   // Poll or sync initial estate from backend
   useEffect(() => {
@@ -154,6 +158,8 @@ export default function App() {
         onOpenHumansMissed={() => setIsHumansMissedOpen(true)}
         onOpenAiConsole={handleOpenAiConsoleWithPrompt}
         onOpenAuditLogs={() => setIsAuditLogDrawerOpen(true)}
+        onOpenDocs={() => setIsDocsOpen(true)}
+        onOpenAirGapped={() => setIsAirGappedOpen(true)}
         onSimulate={handleSimulate}
         isLoading={isLoading}
       />
@@ -224,6 +230,7 @@ export default function App() {
         {currentMode === 'predictive' && (
           <PredictiveMode
             servers={servers}
+            baselines={storageBaselines}
             onRequestApproval={(rec) => setSelectedRecForApproval(rec)}
           />
         )}
@@ -305,6 +312,18 @@ export default function App() {
         isOpen={isAuditLogDrawerOpen}
         onClose={() => setIsAuditLogDrawerOpen(false)}
         auditLogs={auditLogs}
+      />
+
+      {/* 7. Complete System Documentation & Setup Guide Modal */}
+      <SystemDocumentationModal
+        isOpen={isDocsOpen}
+        onClose={() => setIsDocsOpen(false)}
+      />
+
+      {/* 8. Local Air-Gapped & Ollama Settings Modal */}
+      <LocalAirGappedModal
+        isOpen={isAirGappedOpen}
+        onClose={() => setIsAirGappedOpen(false)}
       />
 
     </div>

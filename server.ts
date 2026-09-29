@@ -49,6 +49,90 @@ if (apiKey) {
   }
 }
 
+// =============================================================================
+// LOCAL AIR-GAPPED & OLLAMA CONFIGURATION (ZERO DATA EGRESS)
+// Supports running completely on-premise without cloud API calls.
+// =============================================================================
+interface LlmSettings {
+  provider: 'ollama' | 'gemini';
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+}
+
+let activeLlmConfig: LlmSettings = {
+  provider: (process.env.LLM_PROVIDER as 'ollama' | 'gemini') || (apiKey ? 'gemini' : 'ollama'),
+  ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+  ollamaModel: process.env.OLLAMA_MODEL || 'qwen2.5-coder:32b',
+};
+
+/**
+ * Unified LLM Chat Engine
+ * Routes requests to either local on-premise Ollama or Gemini based on active configuration.
+ * When Ollama is selected, zero telemetry or data leaves your internal network.
+ */
+async function executeLlmChat(systemInstruction: string, userPrompt: string): Promise<any | null> {
+  // 1. Local On-Premise Ollama (100% Private, Air-Gapped)
+  if (activeLlmConfig.provider === 'ollama') {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for local models
+
+      const res = await fetch(`${activeLlmConfig.ollamaBaseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: activeLlmConfig.ollamaModel,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: userPrompt },
+          ],
+          format: 'json',
+          stream: false,
+          options: {
+            temperature: 0.1,
+          },
+        }),
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const json: any = await res.json();
+        const content = json?.message?.content;
+        if (content) {
+          const cleaned = content.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+          return JSON.parse(cleaned);
+        }
+      } else {
+        console.warn(`Ollama responded with HTTP ${res.status}:`, await res.text());
+      }
+    } catch (err: any) {
+      console.warn('Ollama local LLM query notice:', err.message);
+    }
+  }
+
+  // 2. Cloud Gemini Provider (If configured and active)
+  if (activeLlmConfig.provider === 'gemini' && aiClient) {
+    try {
+      const response = await aiClient.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: 'application/json',
+        },
+      });
+      if (response.text) {
+        return JSON.parse(response.text);
+      }
+    } catch (err: any) {
+      console.warn('Gemini query notice:', err.message);
+    }
+  }
+
+  return null;
+}
+
 // In-memory estate state allowing interactive simulations and action execution
 let estateServers = JSON.parse(JSON.stringify(INITIAL_SERVERS));
 let estateIncidents = JSON.parse(JSON.stringify(MOCK_INCIDENTS));
@@ -377,9 +461,7 @@ app.post('/api/dba/query', async (req, res) => {
       operatingMode: mode,
     };
 
-    if (aiClient) {
-      try {
-        const userMessage = `
+    const userMessage = `
 User Query: "${prompt}"
 Operating Mode: ${mode}
 Selected Server: ${serverId || 'ALL'}
@@ -436,27 +518,24 @@ Return a valid JSON object matching:
 }
 `;
 
-        const response = await aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: userMessage,
-          config: {
-            systemInstruction: MASTER_SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-          },
-        });
-
-        if (response.text) {
-          const parsed = JSON.parse(response.text);
-          return res.json({ ...parsed, sourceMode: mode });
-        }
-      } catch (geminiError) {
-        console.warn('Gemini API call failed, falling back to expert engine:', geminiError);
-      }
+    const parsedLlmResponse = await executeLlmChat(MASTER_SYSTEM_INSTRUCTION, userMessage);
+    if (parsedLlmResponse) {
+      return res.json({
+        ...parsedLlmResponse,
+        sourceMode: mode,
+        llmProvider: activeLlmConfig.provider,
+        llmModel: activeLlmConfig.provider === 'ollama' ? activeLlmConfig.ollamaModel : 'gemini-3.8-flash',
+        isAirGapped: activeLlmConfig.provider === 'ollama',
+      });
     }
 
     // Deterministic expert DBA fallback
     const fallbackResponse = generateExpertDbaResponse(prompt, mode);
-    return res.json(fallbackResponse);
+    return res.json({
+      ...fallbackResponse,
+      llmProvider: 'deterministic-expert-fallback',
+      isAirGapped: true,
+    });
   } catch (error: any) {
     console.error('Error handling DBA query:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -466,36 +545,23 @@ Return a valid JSON object matching:
 // 2. Daily Proactive Morning Briefing Route (Section 20)
 app.post('/api/dba/briefing', async (req, res) => {
   try {
-    if (aiClient) {
-      try {
-        const response = await aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Generate the Daily AI DBA Morning Briefing adhering strictly to Section 20 of the specification:
-          1. Healthy systems
-          2. Watch items (emerging risks)
-          3. Action Required (immediate risks)
-          4. Emerging Trends (performance, capacity, security)
-          5. Overnight Events (incidents, alerts, backup/index jobs)
-          6. Recommended Actions ranked by risk
-          7. Automation Opportunities
-          8. Management Attention
+    const briefingPrompt = `Generate the Daily AI DBA Morning Briefing adhering strictly to Section 20 of the specification:
+    1. Healthy systems
+    2. Watch items (emerging risks)
+    3. Action Required (immediate risks)
+    4. Emerging Trends (performance, capacity, security)
+    5. Overnight Events (incidents, alerts, backup/index jobs)
+    6. Recommended Actions ranked by risk
+    7. Automation Opportunities
+    8. Management Attention
 
-          Current Estate State:
-          ${JSON.stringify({ servers: estateServers, incidents: estateIncidents }, null, 2)}
-          `,
-          config: {
-            systemInstruction: MASTER_SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-          },
-        });
+    Current Estate State:
+    ${JSON.stringify({ servers: estateServers, incidents: estateIncidents }, null, 2)}
+    `;
 
-        if (response.text) {
-          const parsed = JSON.parse(response.text);
-          return res.json(parsed);
-        }
-      } catch (geminiErr) {
-        console.warn('Gemini briefing error, falling back:', geminiErr);
-      }
+    const parsedBriefing = await executeLlmChat(MASTER_SYSTEM_INSTRUCTION, briefingPrompt);
+    if (parsedBriefing) {
+      return res.json(parsedBriefing);
     }
 
     // Fallback briefing
@@ -788,48 +854,36 @@ app.post('/api/dba/storage-anomalies/deep-report', async (req, res) => {
     const { baselineId } = req.body;
     const target = estateStorageBaselines.find((b: any) => b.id === baselineId) || estateStorageBaselines[0];
 
-    if (aiClient) {
-      try {
-        const response = await aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Generate a comprehensive Predictive Storage Growth Anomaly Report for:
-          Server: ${target.serverName}, Database: ${target.databaseName}, Volume: ${target.volumeMount}
-          Total Capacity: ${target.totalCapacityGB} GB, Used: ${target.usedGB} GB (${target.utilizationPct}%)
-          Baseline Daily Growth: ${target.baselineDailyGrowthGB} GB/day vs Observed Current: ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}%)
-          Z-Score Anomaly Rating: ${target.zScore}
-          Days to 80%: ${target.daysTo80Pct} days (${target.projectedDate80})
-          Days to 90%: ${target.daysTo90Pct} days (${target.projectedDate90})
-          Days to 100%: ${target.daysTo100Pct} days (${target.projectedDate100})
-          Top Consumer: ${JSON.stringify(target.topTableConsumers[0])}
+    const deepStoragePrompt = `Generate a comprehensive Predictive Storage Growth Anomaly Report for:
+    Server: ${target.serverName}, Database: ${target.databaseName}, Volume: ${target.volumeMount}
+    Total Capacity: ${target.totalCapacityGB} GB, Used: ${target.usedGB} GB (${target.utilizationPct}%)
+    Baseline Daily Growth: ${target.baselineDailyGrowthGB} GB/day vs Observed Current: ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}%)
+    Z-Score Anomaly Rating: ${target.zScore}
+    Days to 80%: ${target.daysTo80Pct} days (${target.projectedDate80})
+    Days to 90%: ${target.daysTo90Pct} days (${target.projectedDate90})
+    Days to 100%: ${target.daysTo100Pct} days (${target.projectedDate100})
+    Top Consumer: ${JSON.stringify(target.topTableConsumers[0])}
 
-          Provide your expert response as a valid JSON object matching:
-          {
-            "executiveSummary": "Concise high-level finding",
-            "statisticalAnalysis": "Deviation z-score analysis comparing 90-day baseline to current velocity",
-            "predictedTimelines": {
-              "threshold80": "Timeline and date for 80% full",
-              "threshold90": "Timeline and date for 90% full",
-              "threshold100": "Timeline and date for complete capacity exhaustion"
-            },
-            "tableBreakdown": "Details on culprit tables and partition churn",
-            "technicalImpact": "Impact on SQL Server autogrowth, log writes, and buffer pool",
-            "businessImpact": "SLA and revenue impact",
-            "rankedRemediations": [
-              { "step": 1, "action": "Action name", "benefit": "Capacity reclaimed", "safetyLevel": "AMBER" | "RED" | "GREEN", "script": "SQL or script" }
-            ]
-          }`,
-          config: {
-            systemInstruction: MASTER_SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-          },
-        });
+    Provide your expert response as a valid JSON object matching:
+    {
+      "executiveSummary": "Concise high-level finding",
+      "statisticalAnalysis": "Deviation z-score analysis comparing 90-day baseline to current velocity",
+      "predictedTimelines": {
+        "threshold80": "Timeline and date for 80% full",
+        "threshold90": "Timeline and date for 90% full",
+        "threshold100": "Timeline and date for complete capacity exhaustion"
+      },
+      "tableBreakdown": "Details on culprit tables and partition churn",
+      "technicalImpact": "Impact on SQL Server autogrowth, log writes, and buffer pool",
+      "businessImpact": "SLA and revenue impact",
+      "rankedRemediations": [
+        { "step": 1, "action": "Action name", "benefit": "Capacity reclaimed", "safetyLevel": "AMBER" | "RED" | "GREEN", "script": "SQL or script" }
+      ]
+    }`;
 
-        if (response.text) {
-          return res.json(JSON.parse(response.text));
-        }
-      } catch (geminiErr) {
-        console.warn('Gemini storage report error, falling back to deterministic engine:', geminiErr);
-      }
+    const parsedReport = await executeLlmChat(MASTER_SYSTEM_INSTRUCTION, deepStoragePrompt);
+    if (parsedReport) {
+      return res.json(parsedReport);
     }
 
     // Deterministic fallback report
@@ -885,53 +939,41 @@ app.post('/api/dba/query-regressions/ai-analyze', async (req, res) => {
     const { queryId } = req.body;
     const query = estateQueryRegressions.find((q: any) => q.queryId === Number(queryId)) || estateQueryRegressions[0];
 
-    if (aiClient) {
-      try {
-        const response = await aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: `Perform an architectural Query Performance Regression Analysis for:
-          Query ID: ${query.queryId} (${query.databaseName} - ${query.objectName})
-          Workload Period: ${query.workloadPeriod}
-          SQL Text: ${query.sqlSnippet}
-          Baseline: Duration ${query.baseline.avgDurationMs}ms, CPU ${query.baseline.avgCpuMs}ms, Reads ${query.baseline.avgLogicalReads}, Execs/hr ${query.baseline.executionCountPerHour}
-          Current: Duration ${query.current.avgDurationMs}ms (+${query.durationRegressionPct}%), CPU ${query.current.avgCpuMs}ms (+${query.cpuRegressionPct}%), Reads ${query.current.avgLogicalReads} (+${query.readsRegressionPct}%)
-          Z-Score Anomaly: ${query.zScore}
-          Regression Nature: ${query.regressionNature}
-          Plan Diff: Previous Plan ${query.planComparison.previousPlanId} (${query.planComparison.previousOperator}) vs Current Plan ${query.planComparison.currentPlanId} (${query.planComparison.currentOperator})
-          Cost Diff: ${query.planComparison.previousCostPct}% vs ${query.planComparison.currentCostPct}%
-          TempDB Spill: ${query.planComparison.tempdbSpillMB} MB
-          Correlated Deployment: ${JSON.stringify(query.correlatedDeployment || {})}
+    const regressionPrompt = `Perform an architectural Query Performance Regression Analysis for:
+    Query ID: ${query.queryId} (${query.databaseName} - ${query.objectName})
+    Workload Period: ${query.workloadPeriod}
+    SQL Text: ${query.sqlSnippet}
+    Baseline: Duration ${query.baseline.avgDurationMs}ms, CPU ${query.baseline.avgCpuMs}ms, Reads ${query.baseline.avgLogicalReads}, Execs/hr ${query.baseline.executionCountPerHour}
+    Current: Duration ${query.current.avgDurationMs}ms (+${query.durationRegressionPct}%), CPU ${query.current.avgCpuMs}ms (+${query.cpuRegressionPct}%), Reads ${query.current.avgLogicalReads} (+${query.readsRegressionPct}%)
+    Z-Score Anomaly: ${query.zScore}
+    Regression Nature: ${query.regressionNature}
+    Plan Diff: Previous Plan ${query.planComparison.previousPlanId} (${query.planComparison.previousOperator}) vs Current Plan ${query.planComparison.currentPlanId} (${query.planComparison.currentOperator})
+    Cost Diff: ${query.planComparison.previousCostPct}% vs ${query.planComparison.currentCostPct}%
+    TempDB Spill: ${query.planComparison.tempdbSpillMB} MB
+    Correlated Deployment: ${JSON.stringify(query.correlatedDeployment || {})}
 
-          Provide your analysis as a valid JSON object matching:
-          {
-            "finding": "One-sentence executive summary",
-            "rootCauseMechanism": "Deep technical explanation of why the SQL Server query optimizer regressed",
-            "workloadImpact": "Analysis considering ${query.workloadPeriod} baseline vs current concurrency",
-            "deploymentLinkage": "How the code change or config change caused this plan switch",
-            "planOperatorComparison": {
-              "previousOperatorPros": "Why Plan ${query.planComparison.previousPlanId} was efficient",
-              "currentOperatorBottlenecks": "Why Plan ${query.planComparison.currentPlanId} is disastrous"
-            },
-            "immediateRemediation": {
-              "actionName": "Action to run now",
-              "safetyLevel": "AMBER" | "RED",
-              "sqlScript": "Exact T-SQL statement",
-              "expectedRecovery": "Quantified expected benefit"
-            },
-            "permanentFix": "Architecture or code change to prevent recurrence"
-          }`,
-          config: {
-            systemInstruction: MASTER_SYSTEM_INSTRUCTION,
-            responseMimeType: 'application/json',
-          },
-        });
+    Provide your analysis as a valid JSON object matching:
+    {
+      "finding": "One-sentence executive summary",
+      "rootCauseMechanism": "Deep technical explanation of why the SQL Server query optimizer regressed",
+      "workloadImpact": "Analysis considering ${query.workloadPeriod} baseline vs current concurrency",
+      "deploymentLinkage": "How the code change or config change caused this plan switch",
+      "planOperatorComparison": {
+        "previousOperatorPros": "Why Plan ${query.planComparison.previousPlanId} was efficient",
+        "currentOperatorBottlenecks": "Why Plan ${query.planComparison.currentPlanId} is disastrous"
+      },
+      "immediateRemediation": {
+        "actionName": "Action to run now",
+        "safetyLevel": "AMBER" | "RED",
+        "sqlScript": "Exact T-SQL statement",
+        "expectedRecovery": "Quantified expected benefit"
+      },
+      "permanentFix": "Architecture or code change to prevent recurrence"
+    }`;
 
-        if (response.text) {
-          return res.json(JSON.parse(response.text));
-        }
-      } catch (geminiErr) {
-        console.warn('Gemini query regression analysis error, falling back:', geminiErr);
-      }
+    const parsedAnalysis = await executeLlmChat(MASTER_SYSTEM_INSTRUCTION, regressionPrompt);
+    if (parsedAnalysis) {
+      return res.json(parsedAnalysis);
     }
 
     // Deterministic fallback
@@ -976,6 +1018,106 @@ app.get('/api/dba/estate', (req, res) => {
   });
 });
 
+
+// 9. LLM Provider Management & Local Air-Gapped Ollama API
+app.get('/api/dba/llm-provider', async (req, res) => {
+  let ollamaOnline = false;
+  let availableOllamaModels: string[] = [];
+  let latencyMs: number | undefined;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
+    const start = Date.now();
+    const tagsRes = await fetch(`${activeLlmConfig.ollamaBaseUrl}/api/tags`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    latencyMs = Date.now() - start;
+
+    if (tagsRes.ok) {
+      const data: any = await tagsRes.json();
+      ollamaOnline = true;
+      if (Array.isArray(data.models)) {
+        availableOllamaModels = data.models.map((m: any) => m.name);
+      }
+    }
+  } catch (e) {
+    ollamaOnline = false;
+  }
+
+  res.json({
+    currentProvider: activeLlmConfig.provider,
+    ollamaBaseUrl: activeLlmConfig.ollamaBaseUrl,
+    ollamaModel: activeLlmConfig.ollamaModel,
+    geminiAvailable: !!apiKey,
+    isAirGapped: activeLlmConfig.provider === 'ollama',
+    ollamaOnline,
+    availableOllamaModels,
+    latencyMs,
+  });
+});
+
+app.post('/api/dba/llm-provider', (req, res) => {
+  const { provider, ollamaBaseUrl, ollamaModel } = req.body;
+  if (provider === 'ollama' || provider === 'gemini') {
+    activeLlmConfig.provider = provider;
+  }
+  if (ollamaBaseUrl && typeof ollamaBaseUrl === 'string') {
+    activeLlmConfig.ollamaBaseUrl = ollamaBaseUrl.trim();
+  }
+  if (ollamaModel && typeof ollamaModel === 'string') {
+    activeLlmConfig.ollamaModel = ollamaModel.trim();
+  }
+
+  res.json({
+    success: true,
+    currentProvider: activeLlmConfig.provider,
+    ollamaBaseUrl: activeLlmConfig.ollamaBaseUrl,
+    ollamaModel: activeLlmConfig.ollamaModel,
+    isAirGapped: activeLlmConfig.provider === 'ollama',
+    message: `LLM provider updated to ${activeLlmConfig.provider.toUpperCase()} (${
+      activeLlmConfig.provider === 'ollama' ? '100% Private Air-Gapped Mode' : 'Cloud Gemini'
+    })`,
+  });
+});
+
+app.post('/api/dba/test-ollama', async (req, res) => {
+  const { url } = req.body;
+  const targetUrl = url || activeLlmConfig.ollamaBaseUrl;
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    const start = Date.now();
+    const response = await fetch(`${targetUrl}/api/tags`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const latency = Date.now() - start;
+
+    if (response.ok) {
+      const data: any = await response.json();
+      const models = Array.isArray(data.models) ? data.models.map((m: any) => m.name) : [];
+      return res.json({
+        online: true,
+        latencyMs: latency,
+        models,
+        message: `Successfully connected to local Ollama instance at ${targetUrl}. Found ${models.length} model(s). Zero data leaves your network.`,
+      });
+    } else {
+      return res.json({
+        online: false,
+        message: `Ollama at ${targetUrl} returned HTTP status ${response.status}`,
+      });
+    }
+  } catch (err: any) {
+    return res.json({
+      online: false,
+      error: err.message,
+      message: `Could not reach Ollama at ${targetUrl}. Ensure Ollama is running ('ollama serve') and accessible from this host.`,
+    });
+  }
+});
 
 // Mount Vite or static server
 async function setupServer() {

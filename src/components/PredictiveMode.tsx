@@ -10,17 +10,22 @@ import {
   Database,
   ArrowRight
 } from 'lucide-react';
-import { ServerInstance, RecommendationItem } from '../types/dba';
+import { ServerInstance, RecommendationItem, StorageGrowthBaseline } from '../types/dba';
+import { StorageExhaustionTimeline } from './StorageExhaustionTimeline';
+import { MOCK_STORAGE_BASELINES } from '../data/mockStorageAndQueryData';
 
 interface PredictiveModeProps {
   servers: ServerInstance[];
+  baselines?: StorageGrowthBaseline[];
   onRequestApproval: (rec: RecommendationItem) => void;
 }
 
 export const PredictiveMode: React.FC<PredictiveModeProps> = ({
   servers,
+  baselines = MOCK_STORAGE_BASELINES,
   onRequestApproval
 }) => {
+
   const predictions = [
     {
       id: 'PRED-01',
@@ -98,6 +103,12 @@ export const PredictiveMode: React.FC<PredictiveModeProps> = ({
           <strong className="text-cyan-400 font-mono">90-Day Moving Regression Active</strong>
         </div>
       </div>
+
+      {/* D3/Recharts Storage Exhaustion Timeline for At-Risk Servers */}
+      <StorageExhaustionTimeline
+        baselines={baselines}
+        onRequestApproval={onRequestApproval}
+      />
 
       {/* Predictive Models Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

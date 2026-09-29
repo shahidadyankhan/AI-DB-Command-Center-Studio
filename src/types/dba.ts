@@ -360,3 +360,15 @@ export type OperatingMode =
   | 'storage-anomalies'
   | 'query-regressions';
 
+export interface LlmProviderConfig {
+  currentProvider: 'ollama' | 'gemini';
+  ollamaBaseUrl: string;
+  ollamaModel: string;
+  geminiAvailable: boolean;
+  isAirGapped: boolean;
+  ollamaOnline?: boolean;
+  availableOllamaModels?: string[];
+  latencyMs?: number;
+}
+
+

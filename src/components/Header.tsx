@@ -13,7 +13,10 @@ import {
   Play, 
   SlidersHorizontal,
   Flame,
-  CheckCircle2
+  CheckCircle2,
+  BookOpen,
+  ShieldCheck,
+  Lock
 } from 'lucide-react';
 import { ServerInstance, Incident } from '../types/dba';
 
@@ -24,6 +27,8 @@ interface HeaderProps {
   onOpenHumansMissed: () => void;
   onOpenAiConsole: (presetPrompt?: string) => void;
   onOpenAuditLogs: () => void;
+  onOpenDocs: () => void;
+  onOpenAirGapped: () => void;
   onSimulate: (scenario: 'reset' | 'spike_storage' | 'trigger_blocking') => void;
   isLoading: boolean;
 }
@@ -35,6 +40,8 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHumansMissed,
   onOpenAiConsole,
   onOpenAuditLogs,
+  onOpenDocs,
+  onOpenAirGapped,
   onSimulate,
   isLoading
 }) => {
@@ -108,6 +115,27 @@ export const Header: React.FC<HeaderProps> = ({
             >
               <History className="w-3.5 h-3.5 text-slate-400" />
               <span>Audit Trail</span>
+            </button>
+
+            {/* System Docs & Setup Guide Trigger */}
+            <button
+              onClick={onOpenDocs}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-cyan-950/60 hover:bg-cyan-900/60 border border-cyan-800/80 text-cyan-300 text-xs font-medium transition cursor-pointer"
+              title="Complete Setup Guide & Operational Documentation"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+              <span>System Docs</span>
+            </button>
+
+            {/* Air-Gapped & Ollama Mode Trigger */}
+            <button
+              onClick={onOpenAirGapped}
+              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-950/70 hover:bg-emerald-900/70 border border-emerald-800/80 text-emerald-300 text-xs font-medium transition cursor-pointer"
+              title="Air-Gapped & Ollama Local LLM Settings (Zero Data Egress)"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Ollama / Air-Gap</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </button>
 
             {/* Telemetry Simulator Menu */}
