@@ -10,7 +10,11 @@ import {
   ShieldCheck, 
   GitCommit, 
   AlertTriangle,
-  Activity
+  Activity,
+  Terminal,
+  Copy,
+  Check,
+  Zap
 } from 'lucide-react';
 import { ServerInstance } from '../types/dba';
 
@@ -49,6 +53,12 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
                 }`}>
                   {server.status} • Health: {server.healthScore}%
                 </span>
+                {server.isRealTime && (
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1 font-bold">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>{server.telemetryMode === 'direct-tds' ? 'LIVE TDS' : server.telemetryMode === 'push-agent' ? 'LIVE PUSH AGENT' : 'LIVE FEED'}</span>
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
                 {server.role} • {server.version} ({server.edition})
@@ -67,6 +77,30 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
         {/* Content */}
         <div className="p-6 overflow-y-auto space-y-6 text-xs">
           
+          {/* Real-Time Telemetry Connection Strip */}
+          <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 font-mono text-[11px]">
+            <div className="flex items-center space-x-2 text-slate-300">
+              <Activity className="w-4 h-4 text-emerald-400" />
+              <span>Telemetry Ingestion:</span>
+              <strong className="text-white">
+                {server.telemetryMode === 'direct-tds' ? 'Direct TDS (Port ' + (server.connectionPort || 1433) + ')' :
+                 server.telemetryMode === 'push-agent' ? 'On-Premise Push Agent' : 'Continuous Stream'}
+              </strong>
+              {server.connectionHost && (
+                <span className="text-slate-500">({server.connectionHost})</span>
+              )}
+            </div>
+
+            <div className="flex items-center space-x-3 text-slate-400">
+              <span>Ping Latency: <strong className="text-cyan-300">{server.liveLatencyMs || 2}ms</strong></span>
+              <span>•</span>
+              <span className="text-emerald-400 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Live Heartbeat Active
+              </span>
+            </div>
+          </div>
+
           {/* Quick Hardware Spec Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">

@@ -16,7 +16,10 @@ import {
   CheckCircle2,
   BookOpen,
   ShieldCheck,
-  Lock
+  Lock,
+  Plus,
+  Radio,
+  Activity
 } from 'lucide-react';
 import { ServerInstance, Incident } from '../types/dba';
 
@@ -29,8 +32,12 @@ interface HeaderProps {
   onOpenAuditLogs: () => void;
   onOpenDocs: () => void;
   onOpenAirGapped: () => void;
+  onOpenAddServer?: () => void;
   onSimulate: (scenario: 'reset' | 'spike_storage' | 'trigger_blocking') => void;
   isLoading: boolean;
+  isLiveStreaming?: boolean;
+  onToggleLiveStreaming?: () => void;
+  lastStreamUpdate?: Date;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -42,8 +49,12 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenAuditLogs,
   onOpenDocs,
   onOpenAirGapped,
+  onOpenAddServer,
   onSimulate,
-  isLoading
+  isLoading,
+  isLiveStreaming = true,
+  onToggleLiveStreaming,
+  lastStreamUpdate
 }) => {
   const [showSimMenu, setShowSimMenu] = useState(false);
 
@@ -137,6 +148,34 @@ export const Header: React.FC<HeaderProps> = ({
               <span>Ollama / Air-Gap</span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </button>
+
+            {/* Live Streaming Toggle */}
+            {onToggleLiveStreaming && (
+              <button
+                onClick={onToggleLiveStreaming}
+                className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono font-medium transition cursor-pointer ${
+                  isLiveStreaming
+                    ? 'bg-emerald-950/60 hover:bg-emerald-900/60 border-emerald-800 text-emerald-300'
+                    : 'bg-slate-900 hover:bg-slate-850 border-slate-800 text-slate-400'
+                }`}
+                title={isLiveStreaming ? "Live real-time DMV telemetry polling active (every 3s). Click to pause." : "Live telemetry polling paused. Click to resume."}
+              >
+                <span className={`w-2 h-2 rounded-full ${isLiveStreaming ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'}`} />
+                <span>{isLiveStreaming ? 'LIVE 3s' : 'PAUSED'}</span>
+              </button>
+            )}
+
+            {/* Register SQL Server Asset Trigger */}
+            {onOpenAddServer && (
+              <button
+                onClick={onOpenAddServer}
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/40 text-white text-xs font-semibold shadow-sm shadow-cyan-900/40 transition cursor-pointer"
+                title="Register a new SQL Server (Direct TDS or Real-Time Push Agent)"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Server</span>
+              </button>
+            )}
 
             {/* Telemetry Simulator Menu */}
             <div className="relative">
@@ -280,7 +319,7 @@ export const Header: React.FC<HeaderProps> = ({
             <div>
               <div className="text-[10px] uppercase tracking-wider text-slate-400 font-mono">Instances</div>
               <div className="font-semibold text-slate-200">
-                {servers.length} Monitored
+                {servers.length} Monitored ({servers.filter(s => s.isRealTime).length} Live)
               </div>
             </div>
           </div>

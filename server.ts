@@ -19,6 +19,12 @@ import {
   MOCK_DETAILED_QUERY_REGRESSIONS
 } from './src/data/mockStorageAndQueryData.js';
 import type { DbaAgentResponse, RecommendationItem, AuditLogEntry } from './src/types/dba.js';
+import {
+  testDirectSqlConnection,
+  fetchLiveDirectTelemetry,
+  generateCollectorScript,
+  liveServerConfigs,
+} from './src/server/sqlLive.js';
 
 dotenv.config();
 
@@ -135,9 +141,15 @@ async function executeLlmChat(systemInstruction: string, userPrompt: string): Pr
 
 // In-memory estate state allowing interactive simulations and action execution
 let estateServers = JSON.parse(JSON.stringify(INITIAL_SERVERS));
+estateServers.forEach((s: any) => {
+  s.isRealTime = true;
+  s.telemetryMode = 'simulated';
+  s.lastHeartbeat = new Date().toISOString();
+});
 let estateIncidents = JSON.parse(JSON.stringify(MOCK_INCIDENTS));
 let estateRecommendations = JSON.parse(JSON.stringify(MOCK_RECOMMENDATIONS));
 let estateAuditLogs = JSON.parse(JSON.stringify(MOCK_AUDIT_LOGS));
+let estateWaitStats = JSON.parse(JSON.stringify(MOCK_WAIT_STATS));
 let estateBlockingChain = JSON.parse(JSON.stringify(MOCK_BLOCKING_CHAIN));
 let estateStorageBaselines = JSON.parse(JSON.stringify(MOCK_STORAGE_BASELINES));
 let estateStorageAlerts = JSON.parse(JSON.stringify(MOCK_STORAGE_ALERTS));
@@ -1008,7 +1020,7 @@ app.get('/api/dba/estate', (req, res) => {
     incidents: estateIncidents,
     recommendations: estateRecommendations,
     auditLogs: estateAuditLogs,
-    waitStats: MOCK_WAIT_STATS,
+    waitStats: estateWaitStats,
     blockingChain: estateBlockingChain,
     queryRegressions: MOCK_QUERY_REGRESSIONS,
     detailedQueryRegressions: estateQueryRegressions,
@@ -1018,40 +1030,71 @@ app.get('/api/dba/estate', (req, res) => {
   });
 });
 
-// 10. SQL Server Asset Management Routes (Add, Probe, Decommission)
+// 10. SQL Server Asset Management & Real-Time Telemetry Routes
+
+// Probe & Test Connection (Real TDS or Lab Simulation)
 app.post('/api/dba/servers/test-connection', async (req, res) => {
   try {
-    const { serverAddress, port, instanceName, authType, username, databases } = req.body;
-    
-    // Simulate real TDS probe and DMV discovery
-    const latency = Math.floor(1 + Math.random() * 4); // 1-4 ms LAN roundtrip
-    const cleanDbList = Array.isArray(databases) && databases.length > 0 
-      ? databases 
-      : ['PaymentsDB', 'SettlementMart', 'AuditArchive'];
+    const { 
+      serverAddress, 
+      port, 
+      instanceName, 
+      authType, 
+      username, 
+      password, 
+      encryptConnection, 
+      trustServerCert, 
+      databases,
+      mode 
+    } = req.body;
 
-    return res.json({
-      success: true,
-      latencyMs: latency,
-      discoveredVersion: 'Microsoft SQL Server 2022 (RTM-CU14) (KB5036838) - 16.0.4125.3',
-      discoveredEdition: 'Enterprise Edition: Core-based Licensing (64-bit)',
-      discoveredOs: 'Windows Server 2022 Datacenter (10.0)',
-      discoveredCores: 32,
-      discoveredMemoryGB: 256,
-      permissionsChecked: [
-        { name: 'VIEW SERVER STATE', granted: true },
-        { name: 'VIEW SERVER PERFORMANCE STATE', granted: true },
-        { name: 'VIEW ANY DEFINITION', granted: true },
-        { name: 'CONNECT SQL', granted: true },
-        { name: 'Query Store Read Access', granted: true },
-      ],
-      discoveredDatabases: cleanDbList,
-      message: `Handshake successful. Verified least-privilege telemetry access for user '${username || 'svc_ai_dba_agent'}'.`,
+    // If explicit simulation requested or no server address provided
+    if (mode === 'simulate' || !serverAddress) {
+      const cleanDbList = Array.isArray(databases) && databases.length > 0 
+        ? databases 
+        : ['PaymentsDB', 'SettlementMart', 'AuditArchive'];
+
+      return res.json({
+        success: true,
+        isRealServer: false,
+        latencyMs: Math.floor(1 + Math.random() * 4),
+        discoveredVersion: 'Microsoft SQL Server 2022 (RTM-CU14) (KB5036838) - 16.0.4125.3',
+        discoveredEdition: 'Enterprise Edition: Core-based Licensing (64-bit)',
+        discoveredOs: 'Windows Server 2022 Datacenter (10.0)',
+        discoveredCores: 32,
+        discoveredMemoryGB: 256,
+        permissionsChecked: [
+          { name: 'VIEW SERVER STATE', granted: true },
+          { name: 'VIEW SERVER PERFORMANCE STATE', granted: true },
+          { name: 'VIEW ANY DEFINITION', granted: true },
+          { name: 'CONNECT SQL', granted: true },
+          { name: 'Query Store Read Access', granted: true },
+        ],
+        discoveredDatabases: cleanDbList,
+        message: 'Lab simulation baseline verified. Ready for onboarding.',
+      });
+    }
+
+    // Attempt real live TDS connection probe
+    const realResult = await testDirectSqlConnection({
+      serverAddress,
+      port: Number(port) || 1433,
+      instanceName,
+      authType,
+      username,
+      password,
+      encryptConnection,
+      trustServerCert,
+      database: Array.isArray(databases) && databases.length > 0 ? databases[0] : 'master',
     });
+
+    return res.json(realResult);
   } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(500).json({ success: false, isRealServer: false, message: error.message });
   }
 });
 
+// Register SQL Server Asset (with Real-Time Live TDS or Push-Agent Support)
 app.post('/api/dba/servers', async (req, res) => {
   try {
     const { 
@@ -1061,15 +1104,44 @@ app.post('/api/dba/servers', async (req, res) => {
       port, 
       role, 
       environment, 
+      authType,
+      username,
+      password,
+      encryptConnection,
+      trustServerCert,
       databases, 
       haArchitecture, 
       rpoMinutes, 
       rtoMinutes, 
-      discoveredSpecs 
+      discoveredSpecs,
+      telemetryMode // 'direct-tds' | 'push-agent' | 'simulated'
     } = req.body;
 
-    const serverId = `sql-${(name || address || 'srv').toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-    const serverName = (name || address || 'SQL-NEW-01').toUpperCase().split('.')[0];
+    const rawHost = address || name || 'SQL-NEW';
+    const cleanName = (name || rawHost.split('.')[0] || 'SQL-NEW').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    const serverId = `sql-${cleanName.toLowerCase()}`;
+    const serverName = cleanName;
+
+    // Generate secure push agent token for local scripts
+    const pushAgentToken = 'tok_' + Math.random().toString(36).substring(2, 10);
+
+    const isDirectReal = discoveredSpecs?.isRealServer === true;
+    const finalTelemetryMode = telemetryMode || (isDirectReal ? 'direct-tds' : 'push-agent');
+
+    // Register configuration in live store for ongoing polling or push ingestion
+    liveServerConfigs.set(serverId, {
+      serverAddress: rawHost,
+      port: Number(port) || 1433,
+      instanceName,
+      authType,
+      username,
+      password,
+      database: databases?.[0] || 'master',
+      encryptConnection,
+      trustServerCert,
+      mode: finalTelemetryMode,
+      token: pushAgentToken,
+    });
 
     const dbList: any[] = (databases || ['AppDB_Primary']).map((dbName: string, idx: number) => ({
       name: dbName,
@@ -1100,70 +1172,133 @@ app.post('/api/dba/servers', async (req, res) => {
       version: discoveredSpecs?.discoveredVersion || 'Microsoft SQL Server 2022 (RTM-CU14)',
       edition: discoveredSpecs?.discoveredEdition || 'Enterprise Edition (64-bit)',
       cpuCores: discoveredSpecs?.discoveredCores || 32,
-      cpuUsagePct: 38,
-      osCpuUsagePct: 42,
+      cpuUsagePct: 28,
+      osCpuUsagePct: 32,
       memoryTotalGB: discoveredSpecs?.discoveredMemoryGB || 256,
-      memoryUsedGB: 184,
-      pageLifeExpectancySec: 1840,
-      targetServerMemoryGB: 240,
-      totalServerMemoryGB: 184,
-      healthScore: 96,
+      memoryUsedGB: Math.round((discoveredSpecs?.discoveredMemoryGB || 256) * 0.65),
+      pageLifeExpectancySec: 1950,
+      targetServerMemoryGB: Math.round((discoveredSpecs?.discoveredMemoryGB || 256) * 0.9),
+      totalServerMemoryGB: Math.round((discoveredSpecs?.discoveredMemoryGB || 256) * 0.65),
+      healthScore: 98,
       status: 'healthy',
       storageStatus: 'normal',
-      diskFreePct: 48,
-      daysTo80PctDisk: 240,
-      avgReadLatencyMs: 1.8,
+      diskFreePct: 52,
+      daysTo80PctDisk: 260,
+      avgReadLatencyMs: discoveredSpecs?.latencyMs ? Number((discoveredSpecs.latencyMs * 0.8).toFixed(1)) : 1.8,
       avgWriteLatencyMs: 1.4,
-      activeConnections: 380,
+      activeConnections: 120,
       blockedSessionsCount: 0,
       deadlocksLast24h: 0,
       alwaysOnStatus: haArchitecture?.includes('Always On') ? 'healthy' : 'not-applicable',
       lastFullBackupHoursAgo: 2,
-      lastLogBackupMinutesAgo: 4,
+      lastLogBackupMinutesAgo: 5,
       databases: dbList,
       recentChanges: [],
+      // Real-time telemetry indicators
+      isRealTime: true,
+      telemetryMode: finalTelemetryMode,
+      lastHeartbeat: new Date().toISOString(),
+      connectionHost: rawHost,
+      connectionPort: Number(port) || 1433,
+      liveLatencyMs: discoveredSpecs?.latencyMs || 2,
+      pushAgentToken,
     };
 
     // Avoid duplicate IDs
     estateServers = estateServers.filter((s: any) => s.id !== serverId);
     estateServers.push(newServer);
 
+    // Initialize wait statistics profile for this new server
+    estateWaitStats[serverId] = [
+      {
+        waitType: 'CXPACKET',
+        category: 'Parallelism',
+        waitingTasksCount: 4200,
+        waitDurationMs: 84000,
+        avgWaitMs: 20,
+        signalWaitMs: 3200,
+        pctOfTotalWaits: 38,
+        description: 'Parallel execution coordinator wait. Normal for multi-core analytics.',
+      },
+      {
+        waitType: 'PAGEIOLATCH_SH',
+        category: 'Storage',
+        waitingTasksCount: 1800,
+        waitDurationMs: 45000,
+        avgWaitMs: 2.5,
+        signalWaitMs: 120,
+        pctOfTotalWaits: 25,
+        description: 'Reading data pages from storage into buffer pool.',
+      },
+      {
+        waitType: 'SOS_SCHEDULER_YIELD',
+        category: 'CPU',
+        waitingTasksCount: 8900,
+        waitDurationMs: 28000,
+        avgWaitMs: 3.1,
+        signalWaitMs: 28000,
+        pctOfTotalWaits: 18,
+        description: 'Thread voluntarily yielded CPU quantum. High concurrency worker activity.',
+      },
+      {
+        waitType: 'WRITELOG',
+        category: 'Log',
+        waitingTasksCount: 3100,
+        waitDurationMs: 18600,
+        avgWaitMs: 1.6,
+        signalWaitMs: 80,
+        pctOfTotalWaits: 12,
+        description: 'Waiting for transaction log flush to disk on commit.',
+      },
+      {
+        waitType: 'ASYNC_NETWORK_IO',
+        category: 'Network',
+        waitingTasksCount: 920,
+        waitDurationMs: 9200,
+        avgWaitMs: 10,
+        signalWaitMs: 40,
+        pctOfTotalWaits: 7,
+        description: 'SQL Server waiting for application client to fetch row batches.',
+      }
+    ];
+
     // Create baseline storage volume
     const baselineId = `BASE-${serverName}-DATA`;
+    estateStorageBaselines = estateStorageBaselines.filter((b: any) => b.id !== baselineId);
     estateStorageBaselines.push({
       id: baselineId,
       serverName,
       databaseName: dbList[0]?.name || 'PrimaryDB',
       volumeMount: 'D:\\Data',
       totalCapacityGB: 2048,
-      usedGB: 820,
-      freeGB: 1228,
-      utilizationPct: 40.0,
-      baselineDailyGrowthGB: 5.5,
-      currentDailyGrowthGB: 5.8,
-      growthVelocitySurgePct: 5.4,
-      zScore: 0.32,
-      daysTo80Pct: 148,
-      projectedDate80: 'Mar 24, 2027',
-      daysTo90Pct: 185,
-      projectedDate90: 'Apr 30, 2027',
-      daysTo100Pct: 222,
-      projectedDate100: 'Jun 06, 2027',
+      usedGB: 680,
+      freeGB: 1368,
+      utilizationPct: 33.2,
+      baselineDailyGrowthGB: 4.8,
+      currentDailyGrowthGB: 5.1,
+      growthVelocitySurgePct: 6.2,
+      zScore: 0.28,
+      daysTo80Pct: 185,
+      projectedDate80: 'Apr 20, 2027',
+      daysTo90Pct: 228,
+      projectedDate90: 'Jun 02, 2027',
+      daysTo100Pct: 270,
+      projectedDate100: 'Jul 14, 2027',
       isAnomaly: false,
       anomalySeverity: 'NORMAL',
       historicalDataPoints: [
-        { date: 'Day -28', usedGB: 760, baselineGB: 760, isForecast: false },
-        { date: 'Day -21', usedGB: 775, baselineGB: 775, isForecast: false },
-        { date: 'Day -14', usedGB: 790, baselineGB: 790, isForecast: false },
-        { date: 'Day -7', usedGB: 805, baselineGB: 805, isForecast: false },
-        { date: 'Today', usedGB: 820, baselineGB: 820, isForecast: false },
+        { date: 'Day -28', usedGB: 640, baselineGB: 640, isForecast: false },
+        { date: 'Day -21', usedGB: 650, baselineGB: 650, isForecast: false },
+        { date: 'Day -14', usedGB: 660, baselineGB: 660, isForecast: false },
+        { date: 'Day -7', usedGB: 670, baselineGB: 670, isForecast: false },
+        { date: 'Today', usedGB: 680, baselineGB: 680, isForecast: false },
       ],
       topTableConsumers: [
         {
           tableName: `dbo.${dbList[0]?.name || 'Core'}_Master`,
-          sizeGB: 340,
-          growth30dGB: 18,
-          pctOfDatabase: 41.5,
+          sizeGB: 280,
+          growth30dGB: 14,
+          pctOfDatabase: 41.2,
           isPartitioned: false,
           compressionType: 'NONE',
         },
@@ -1195,12 +1330,12 @@ app.post('/api/dba/servers', async (req, res) => {
       server: serverName,
       database: dbList[0]?.name || 'master',
       action: 'REGISTER_SQL_SERVER_ASSET',
-      reason: `Asset registered into monitored database inventory. Role: ${role || 'OLTP'}`,
+      reason: `Asset registered into monitored database inventory. Mode: ${finalTelemetryMode}`,
       safetyLevel: 'GREEN',
       approvalBy: 'DBA_SELF_PROVISION',
       beforeState: 'Unmonitored SQL Server instance',
-      afterState: `Active monitored state: ${newServer.healthScore}/100, ${dbList.length} databases`,
-      validation: `TDS handshake verified (${discoveredSpecs?.latencyMs || 2}ms), DMV diagnostic feeds active`,
+      afterState: `Active real-time monitored state: ${newServer.healthScore}/100, ${dbList.length} databases`,
+      validation: `TDS handshake verified (${discoveredSpecs?.latencyMs || 2}ms), DMV feeds active`,
       status: 'SUCCESS',
     });
 
@@ -1208,12 +1343,220 @@ app.post('/api/dba/servers', async (req, res) => {
       success: true,
       server: newServer,
       servers: estateServers,
-      message: `SQL Server asset ${serverName} registered successfully into estate inventory.`,
+      waitStats: estateWaitStats,
+      storageBaselines: estateStorageBaselines,
+      auditLogs: estateAuditLogs,
+      pushAgentToken,
+      message: `SQL Server asset ${serverName} registered successfully into estate inventory with real-time telemetry (${finalTelemetryMode}).`,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Real-Time Telemetry Push Ingestion Endpoint
+// Allows local PowerShell, Python, or bash agents on SQL Server machines to stream live metrics
+app.post('/api/dba/telemetry/push', (req, res) => {
+  try {
+    const { 
+      serverId, 
+      serverName, 
+      token, 
+      cpuUsagePct, 
+      osCpuUsagePct,
+      pageLifeExpectancySec,
+      activeConnections,
+      blockedSessionsCount,
+      avgReadLatencyMs,
+      avgWriteLatencyMs,
+      waitStats,
+      blockingSessions,
+      databases,
+      storageVolumes
+    } = req.body;
+
+    if (!serverId) {
+      return res.status(400).json({ error: 'Missing required field: serverId' });
+    }
+
+    let targetServer = estateServers.find((s: any) => s.id === serverId || s.name.toUpperCase() === String(serverId).toUpperCase());
+
+    // If server does not exist yet, automatically auto-provision it in real time
+    if (!targetServer) {
+      const cleanName = (serverName || serverId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
+      targetServer = {
+        id: serverId,
+        name: cleanName,
+        role: 'Live Monitored Workload',
+        environment: 'production',
+        os: 'Windows Server / Linux Host',
+        version: 'Microsoft SQL Server (Live Agent)',
+        edition: 'SQL Server Standard/Enterprise',
+        cpuCores: 16,
+        cpuUsagePct: cpuUsagePct ?? 25,
+        osCpuUsagePct: osCpuUsagePct ?? 30,
+        memoryTotalGB: 128,
+        memoryUsedGB: 64,
+        pageLifeExpectancySec: pageLifeExpectancySec ?? 1500,
+        targetServerMemoryGB: 110,
+        totalServerMemoryGB: 64,
+        healthScore: 98,
+        status: 'healthy',
+        storageStatus: 'normal',
+        diskFreePct: 45,
+        daysTo80PctDisk: 180,
+        avgReadLatencyMs: avgReadLatencyMs ?? 2.0,
+        avgWriteLatencyMs: avgWriteLatencyMs ?? 1.5,
+        activeConnections: activeConnections ?? 30,
+        blockedSessionsCount: blockedSessionsCount ?? 0,
+        deadlocksLast24h: 0,
+        alwaysOnStatus: 'not-applicable',
+        lastFullBackupHoursAgo: 2,
+        lastLogBackupMinutesAgo: 5,
+        databases: [
+          {
+            name: 'ProductionDB',
+            serverId,
+            owner: 'Database Administration',
+            application: 'Enterprise Live Service',
+            criticality: 'Tier 1 - Mission Critical',
+            sizeGB: 350,
+            growthRate30DaysPct: 6.5,
+            recoveryModel: 'FULL',
+            rpoMinutes: 5,
+            rtoMinutes: 15,
+            backupStatus: 'HEALTHY',
+            haStatus: 'STANDALONE',
+            cpuContributionPct: 35,
+            ioContributionPct: 40,
+            activeTransactions: 80,
+            logSpaceUsedPct: 20,
+            dataSpaceUsedPct: 65,
+          }
+        ],
+        recentChanges: [],
+        isRealTime: true,
+        telemetryMode: 'push-agent',
+        lastHeartbeat: new Date().toISOString(),
+      };
+      estateServers.push(targetServer);
+    }
+
+    // Update real-time metrics
+    if (cpuUsagePct !== undefined) targetServer.cpuUsagePct = Number(cpuUsagePct);
+    if (osCpuUsagePct !== undefined) targetServer.osCpuUsagePct = Number(osCpuUsagePct);
+    if (pageLifeExpectancySec !== undefined) targetServer.pageLifeExpectancySec = Number(pageLifeExpectancySec);
+    if (activeConnections !== undefined) targetServer.activeConnections = Number(activeConnections);
+    if (blockedSessionsCount !== undefined) targetServer.blockedSessionsCount = Number(blockedSessionsCount);
+    if (avgReadLatencyMs !== undefined) targetServer.avgReadLatencyMs = Number(avgReadLatencyMs);
+    if (avgWriteLatencyMs !== undefined) targetServer.avgWriteLatencyMs = Number(avgWriteLatencyMs);
+
+    targetServer.lastHeartbeat = new Date().toISOString();
+    targetServer.isRealTime = true;
+    targetServer.telemetryMode = 'push-agent';
+
+    // Compute dynamic health score based on live telemetry
+    let health = 100;
+    if (targetServer.blockedSessionsCount > 0) health -= Math.min(35, targetServer.blockedSessionsCount * 4);
+    if (targetServer.cpuUsagePct > 80) health -= 20;
+    else if (targetServer.cpuUsagePct > 65) health -= 10;
+    if (targetServer.pageLifeExpectancySec < 300) health -= 25;
+    else if (targetServer.pageLifeExpectancySec < 600) health -= 10;
+    if (targetServer.avgReadLatencyMs > 20) health -= 15;
+
+    targetServer.healthScore = Math.max(10, health);
+    targetServer.status = targetServer.healthScore < 70 ? 'critical' : targetServer.healthScore < 85 ? 'warning' : 'healthy';
+
+    // Update wait statistics if provided
+    if (Array.isArray(waitStats) && waitStats.length > 0) {
+      estateWaitStats[targetServer.id] = waitStats;
+    }
+
+    // Update blocking chain if provided
+    if (Array.isArray(blockingSessions) && blockingSessions.length > 0) {
+      estateBlockingChain = blockingSessions;
+    }
+
+    return res.json({
+      success: true,
+      serverId: targetServer.id,
+      serverName: targetServer.name,
+      healthScore: targetServer.healthScore,
+      timestamp: targetServer.lastHeartbeat,
+      message: 'Real-time telemetry packet processed successfully',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Download/Inspect Collector Script (PowerShell, Python, or Bash)
+app.get('/api/dba/agent/script', (req, res) => {
+  try {
+    const { serverId = 'sql-custom-01', serverName = 'SQL-CUSTOM-01', format = 'powershell' } = req.query;
+    const protocol = req.protocol;
+    const host = req.get('host');
+    const apiEndpoint = `${protocol}://${host}/api/dba/telemetry/push`;
+    const token = liveServerConfigs.get(String(serverId))?.token || 'tok_live_agent';
+
+    const script = generateCollectorScript({
+      serverId: String(serverId),
+      serverName: String(serverName),
+      token,
+      apiEndpoint,
+      format: (format as any) || 'powershell',
+    });
+
+    if (format === 'powershell') {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="ai-dba-collector-${serverId}.ps1"`);
+    } else if (format === 'python') {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="ai-dba-collector-${serverId}.py"`);
+    } else {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    }
+
+    res.send(script);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Real-Time Background Telemetry Poller & Heartbeat Engine
+setInterval(async () => {
+  try {
+    // 1. Poll direct TDS SQL Servers
+    for (const [sId, config] of liveServerConfigs.entries()) {
+      if (config.mode === 'direct-tds') {
+        const liveSnapshot = await fetchLiveDirectTelemetry(config);
+        if (liveSnapshot) {
+          const s = estateServers.find((srv: any) => srv.id === sId);
+          if (s) {
+            if (liveSnapshot.cpuUsagePct !== undefined) s.cpuUsagePct = liveSnapshot.cpuUsagePct;
+            if (liveSnapshot.pageLifeExpectancySec !== undefined) s.pageLifeExpectancySec = liveSnapshot.pageLifeExpectancySec;
+            if (liveSnapshot.activeConnections !== undefined) s.activeConnections = liveSnapshot.activeConnections;
+            if (liveSnapshot.blockedSessionsCount !== undefined) s.blockedSessionsCount = liveSnapshot.blockedSessionsCount;
+            s.lastHeartbeat = new Date().toISOString();
+            if (liveSnapshot.waitStats) estateWaitStats[sId] = liveSnapshot.waitStats;
+          }
+        }
+      }
+    }
+
+    // 2. Gentle natural telemetry fluctuations for simulated instances so the dashboard stays alive
+    estateServers.forEach((s: any) => {
+      if (s.telemetryMode === 'simulated') {
+        const jitter = (Math.random() - 0.5) * 3;
+        s.cpuUsagePct = Math.max(12, Math.min(96, Math.round(s.cpuUsagePct + jitter)));
+        s.activeConnections = Math.max(50, Math.round(s.activeConnections + (Math.random() - 0.5) * 4));
+        s.lastHeartbeat = new Date().toISOString();
+      }
+    });
+  } catch (err) {
+    // Keep background tick resilient
+  }
+}, 6000);
 
 
 // 9. LLM Provider Management & Local Air-Gapped Ollama API

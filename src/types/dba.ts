@@ -29,6 +29,14 @@ export interface ServerInstance {
   lastLogBackupMinutesAgo: number;
   databases: DatabaseInfo[];
   recentChanges: ChangeCorrelationEvent[];
+  // Real-time telemetry indicators
+  isRealTime?: boolean;
+  telemetryMode?: 'direct-tds' | 'push-agent' | 'simulated';
+  lastHeartbeat?: string;
+  connectionHost?: string;
+  connectionPort?: number;
+  liveLatencyMs?: number;
+  pushAgentToken?: string;
 }
 
 export interface DatabaseInfo {

@@ -81,13 +81,16 @@ export default function App() {
   const [isDocsOpen, setIsDocsOpen] = useState(false);
   const [isAirGappedOpen, setIsAirGappedOpen] = useState(false);
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
+  const [isLiveStreaming, setIsLiveStreaming] = useState(true);
+  const [lastStreamUpdate, setLastStreamUpdate] = useState<Date>(new Date());
 
-  // Poll or sync initial estate from backend
+  // Continuous Real-Time Telemetry Stream Poller (every 3 seconds)
   useEffect(() => {
+    let isMounted = true;
     const fetchEstate = async () => {
       try {
         const res = await fetch('/api/dba/estate');
-        if (res.ok) {
+        if (res.ok && isMounted) {
           const data = await res.json();
           if (data.servers) setServers(data.servers);
           if (data.incidents) setIncidents(data.incidents);
@@ -99,14 +102,24 @@ export default function App() {
           if (data.storageBaselines) setStorageBaselines(data.storageBaselines);
           if (data.storageAlerts) setStorageAlerts(data.storageAlerts);
           if (data.detailedQueryRegressions) setDetailedQueryRegressions(data.detailedQueryRegressions);
+          setLastStreamUpdate(new Date());
         }
       } catch (err) {
-        console.warn('Backend estate fetch failed, using local mock store:', err);
+        // Keep streaming resilient
       }
     };
 
     fetchEstate();
-  }, []);
+
+    let intervalId: any = null;
+    if (isLiveStreaming) {
+      intervalId = setInterval(fetchEstate, 3000);
+    }
+    return () => {
+      isMounted = false;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [isLiveStreaming]);
 
   // Telemetry Simulation Injector
   const handleSimulate = async (scenario: 'reset' | 'spike_storage' | 'trigger_blocking') => {
@@ -149,6 +162,14 @@ export default function App() {
     setIsAiConsoleOpen(true);
   };
 
+  const handleServerAdded = (newServer: ServerInstance, data: any) => {
+    if (data.servers) setServers(data.servers);
+    if (data.waitStats) setWaitStats(data.waitStats);
+    if (data.storageBaselines) setStorageBaselines(data.storageBaselines);
+    if (data.auditLogs) setAuditLogs(data.auditLogs);
+    setSelectedServerForDetail(newServer);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
       
@@ -162,8 +183,12 @@ export default function App() {
         onOpenAuditLogs={() => setIsAuditLogDrawerOpen(true)}
         onOpenDocs={() => setIsDocsOpen(true)}
         onOpenAirGapped={() => setIsAirGappedOpen(true)}
+        onOpenAddServer={() => setIsAddServerOpen(true)}
         onSimulate={handleSimulate}
         isLoading={isLoading}
+        isLiveStreaming={isLiveStreaming}
+        onToggleLiveStreaming={() => setIsLiveStreaming(!isLiveStreaming)}
+        lastStreamUpdate={lastStreamUpdate}
       />
 
       {/* 6 Operating Modes Switcher */}
@@ -334,9 +359,7 @@ export default function App() {
       <AddServerModal
         isOpen={isAddServerOpen}
         onClose={() => setIsAddServerOpen(false)}
-        onServerAdded={(newServer, allServers) => {
-          setServers(allServers);
-        }}
+        onServerAdded={handleServerAdded}
       />
 
     </div>

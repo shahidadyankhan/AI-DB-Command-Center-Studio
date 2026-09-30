@@ -365,6 +365,34 @@ Continuously correlates:
                   </pre>
                 </div>
 
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
+                  <h4 className="font-bold text-white flex items-center gap-2">
+                    <Server className="w-4 h-4 text-emerald-400" />
+                    <span>How to Add New SQL Server Assets with Real-Time Data</span>
+                  </h4>
+                  <p className="text-slate-300 text-xs">
+                    You can onboard any on-premise, cloud, or developer SQL Server into the AI DBA Command Center using two primary ingestion methods:
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="bg-slate-900/80 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                      <span className="font-bold text-cyan-300 text-xs flex items-center gap-1.5">
+                        <Terminal className="w-3.5 h-3.5" /> Method A: Direct TDS (Port 1433)
+                      </span>
+                      <p className="text-[11px] text-slate-400">
+                        Provide the hostname/IP, port 1433, and SQL login (<code className="text-cyan-300 font-mono">svc_ai_dba_agent</code>). The Command Center connects directly and queries DMVs every 5s.
+                      </p>
+                    </div>
+                    <div className="bg-slate-900/80 p-3 rounded-lg border border-slate-800 space-y-1.5">
+                      <span className="font-bold text-emerald-300 text-xs flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5" /> Method B: Real-Time Push Agent (Zero Inbound Firewall)
+                      </span>
+                      <p className="text-[11px] text-slate-400">
+                        For firewalled on-premise servers. Run the 1-click PowerShell collector script on the server machine to stream DMV metrics out to <code className="text-emerald-300 font-mono">/api/dba/telemetry/push</code> every 5 seconds.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
                   <h4 className="font-bold text-white">Pre-Requisites Checklist:</h4>
                   <ul className="space-y-1.5 text-slate-300 list-disc list-inside">

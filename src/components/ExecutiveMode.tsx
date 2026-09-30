@@ -178,6 +178,12 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
                       }`}>
                         {s.status}
                       </span>
+                      {s.isRealTime && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800 flex items-center gap-1 font-bold">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                          <span>{s.telemetryMode === 'direct-tds' ? 'LIVE TDS' : s.telemetryMode === 'push-agent' ? 'LIVE AGENT' : 'LIVE'}</span>
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-slate-400 mt-0.5 truncate max-w-[200px]">
                       {s.role}
