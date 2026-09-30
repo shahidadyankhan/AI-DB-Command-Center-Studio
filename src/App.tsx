@@ -22,6 +22,7 @@ import { ServerDetailModal } from './components/ServerDetailModal';
 import { AuditLogDrawer } from './components/AuditLogDrawer';
 import { SystemDocumentationModal } from './components/SystemDocumentationModal';
 import { LocalAirGappedModal } from './components/LocalAirGappedModal';
+import { AddServerModal } from './components/AddServerModal';
 
 import {
   INITIAL_SERVERS,
@@ -79,6 +80,7 @@ export default function App() {
   const [isAuditLogDrawerOpen, setIsAuditLogDrawerOpen] = useState(false);
   const [isDocsOpen, setIsDocsOpen] = useState(false);
   const [isAirGappedOpen, setIsAirGappedOpen] = useState(false);
+  const [isAddServerOpen, setIsAddServerOpen] = useState(false);
 
   // Poll or sync initial estate from backend
   useEffect(() => {
@@ -183,6 +185,7 @@ export default function App() {
               setCurrentMode('incident');
             }}
             onRequestApproval={(rec) => setSelectedRecForApproval(rec)}
+            onOpenAddServer={() => setIsAddServerOpen(true)}
           />
         )}
 
@@ -193,6 +196,7 @@ export default function App() {
             blockingChain={blockingChain}
             queryRegressions={queryRegressions}
             onRequestApproval={(rec) => setSelectedRecForApproval(rec)}
+            onOpenAddServer={() => setIsAddServerOpen(true)}
           />
         )}
 
@@ -324,6 +328,15 @@ export default function App() {
       <LocalAirGappedModal
         isOpen={isAirGappedOpen}
         onClose={() => setIsAirGappedOpen(false)}
+      />
+
+      {/* 9. Register New SQL Server Asset Modal */}
+      <AddServerModal
+        isOpen={isAddServerOpen}
+        onClose={() => setIsAddServerOpen(false)}
+        onServerAdded={(newServer, allServers) => {
+          setServers(allServers);
+        }}
       />
 
     </div>

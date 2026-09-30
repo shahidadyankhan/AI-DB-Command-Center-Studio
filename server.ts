@@ -1018,6 +1018,203 @@ app.get('/api/dba/estate', (req, res) => {
   });
 });
 
+// 10. SQL Server Asset Management Routes (Add, Probe, Decommission)
+app.post('/api/dba/servers/test-connection', async (req, res) => {
+  try {
+    const { serverAddress, port, instanceName, authType, username, databases } = req.body;
+    
+    // Simulate real TDS probe and DMV discovery
+    const latency = Math.floor(1 + Math.random() * 4); // 1-4 ms LAN roundtrip
+    const cleanDbList = Array.isArray(databases) && databases.length > 0 
+      ? databases 
+      : ['PaymentsDB', 'SettlementMart', 'AuditArchive'];
+
+    return res.json({
+      success: true,
+      latencyMs: latency,
+      discoveredVersion: 'Microsoft SQL Server 2022 (RTM-CU14) (KB5036838) - 16.0.4125.3',
+      discoveredEdition: 'Enterprise Edition: Core-based Licensing (64-bit)',
+      discoveredOs: 'Windows Server 2022 Datacenter (10.0)',
+      discoveredCores: 32,
+      discoveredMemoryGB: 256,
+      permissionsChecked: [
+        { name: 'VIEW SERVER STATE', granted: true },
+        { name: 'VIEW SERVER PERFORMANCE STATE', granted: true },
+        { name: 'VIEW ANY DEFINITION', granted: true },
+        { name: 'CONNECT SQL', granted: true },
+        { name: 'Query Store Read Access', granted: true },
+      ],
+      discoveredDatabases: cleanDbList,
+      message: `Handshake successful. Verified least-privilege telemetry access for user '${username || 'svc_ai_dba_agent'}'.`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/dba/servers', async (req, res) => {
+  try {
+    const { 
+      name, 
+      address, 
+      instanceName, 
+      port, 
+      role, 
+      environment, 
+      databases, 
+      haArchitecture, 
+      rpoMinutes, 
+      rtoMinutes, 
+      discoveredSpecs 
+    } = req.body;
+
+    const serverId = `sql-${(name || address || 'srv').toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+    const serverName = (name || address || 'SQL-NEW-01').toUpperCase().split('.')[0];
+
+    const dbList: any[] = (databases || ['AppDB_Primary']).map((dbName: string, idx: number) => ({
+      name: dbName,
+      serverId,
+      owner: 'Platform Engineering',
+      application: role || 'Business Critical Workload',
+      criticality: idx === 0 ? 'Tier 1 - Mission Critical' : 'Tier 2 - Business Essential',
+      sizeGB: Math.floor(200 + Math.random() * 800),
+      growthRate30DaysPct: Number((6 + Math.random() * 8).toFixed(1)),
+      recoveryModel: 'FULL',
+      rpoMinutes: rpoMinutes || 5,
+      rtoMinutes: rtoMinutes || 30,
+      backupStatus: 'HEALTHY',
+      haStatus: haArchitecture?.includes('Always On') ? 'SYNCHRONIZED' : 'STANDALONE',
+      cpuContributionPct: Math.floor(10 + Math.random() * 30),
+      ioContributionPct: Math.floor(10 + Math.random() * 30),
+      activeTransactions: Math.floor(50 + Math.random() * 150),
+      logSpaceUsedPct: Math.floor(15 + Math.random() * 30),
+      dataSpaceUsedPct: Math.floor(50 + Math.random() * 25),
+    }));
+
+    const newServer: any = {
+      id: serverId,
+      name: serverName,
+      role: role || 'Enterprise Database Engine',
+      environment: environment || 'production',
+      os: discoveredSpecs?.discoveredOs || 'Windows Server 2022 Datacenter',
+      version: discoveredSpecs?.discoveredVersion || 'Microsoft SQL Server 2022 (RTM-CU14)',
+      edition: discoveredSpecs?.discoveredEdition || 'Enterprise Edition (64-bit)',
+      cpuCores: discoveredSpecs?.discoveredCores || 32,
+      cpuUsagePct: 38,
+      osCpuUsagePct: 42,
+      memoryTotalGB: discoveredSpecs?.discoveredMemoryGB || 256,
+      memoryUsedGB: 184,
+      pageLifeExpectancySec: 1840,
+      targetServerMemoryGB: 240,
+      totalServerMemoryGB: 184,
+      healthScore: 96,
+      status: 'healthy',
+      storageStatus: 'normal',
+      diskFreePct: 48,
+      daysTo80PctDisk: 240,
+      avgReadLatencyMs: 1.8,
+      avgWriteLatencyMs: 1.4,
+      activeConnections: 380,
+      blockedSessionsCount: 0,
+      deadlocksLast24h: 0,
+      alwaysOnStatus: haArchitecture?.includes('Always On') ? 'healthy' : 'not-applicable',
+      lastFullBackupHoursAgo: 2,
+      lastLogBackupMinutesAgo: 4,
+      databases: dbList,
+      recentChanges: [],
+    };
+
+    // Avoid duplicate IDs
+    estateServers = estateServers.filter((s: any) => s.id !== serverId);
+    estateServers.push(newServer);
+
+    // Create baseline storage volume
+    const baselineId = `BASE-${serverName}-DATA`;
+    estateStorageBaselines.push({
+      id: baselineId,
+      serverName,
+      databaseName: dbList[0]?.name || 'PrimaryDB',
+      volumeMount: 'D:\\Data',
+      totalCapacityGB: 2048,
+      usedGB: 820,
+      freeGB: 1228,
+      utilizationPct: 40.0,
+      baselineDailyGrowthGB: 5.5,
+      currentDailyGrowthGB: 5.8,
+      growthVelocitySurgePct: 5.4,
+      zScore: 0.32,
+      daysTo80Pct: 148,
+      projectedDate80: 'Mar 24, 2027',
+      daysTo90Pct: 185,
+      projectedDate90: 'Apr 30, 2027',
+      daysTo100Pct: 222,
+      projectedDate100: 'Jun 06, 2027',
+      isAnomaly: false,
+      anomalySeverity: 'NORMAL',
+      historicalDataPoints: [
+        { date: 'Day -28', usedGB: 760, baselineGB: 760, isForecast: false },
+        { date: 'Day -21', usedGB: 775, baselineGB: 775, isForecast: false },
+        { date: 'Day -14', usedGB: 790, baselineGB: 790, isForecast: false },
+        { date: 'Day -7', usedGB: 805, baselineGB: 805, isForecast: false },
+        { date: 'Today', usedGB: 820, baselineGB: 820, isForecast: false },
+      ],
+      topTableConsumers: [
+        {
+          tableName: `dbo.${dbList[0]?.name || 'Core'}_Master`,
+          sizeGB: 340,
+          growth30dGB: 18,
+          pctOfDatabase: 41.5,
+          isPartitioned: false,
+          compressionType: 'NONE',
+        },
+      ],
+      recommendedAction: {
+        id: `REC-ONBOARD-${serverName}`,
+        title: `Verify Backup Integrity & Baseline for ${serverName}`,
+        why: 'Initial asset onboarding requires standard verification of maintenance plans and backup schedules.',
+        evidence: 'Newly registered SQL Server instance.',
+        expectedBenefit: 'Guarantees enterprise RPO/RTO SLA adherence.',
+        risk: 'LOW',
+        implementationComplexity: 'LOW',
+        rollbackMethod: 'None required.',
+        validationMethod: 'sys.dm_server_services verification.',
+        priority: 'MEDIUM',
+        safetyLevel: 'GREEN',
+        targetServer: serverName,
+        targetDatabase: dbList[0]?.name || 'master',
+      },
+    });
+
+    // Add audit entry
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+    estateAuditLogs.unshift({
+      id: `AUD-${Math.floor(1000 + Math.random() * 9000)}`,
+      timestamp,
+      requester: 'DBA Admin [Console UI]',
+      agent: 'AI DBA Command Center v1.0',
+      server: serverName,
+      database: dbList[0]?.name || 'master',
+      action: 'REGISTER_SQL_SERVER_ASSET',
+      reason: `Asset registered into monitored database inventory. Role: ${role || 'OLTP'}`,
+      safetyLevel: 'GREEN',
+      approvalBy: 'DBA_SELF_PROVISION',
+      beforeState: 'Unmonitored SQL Server instance',
+      afterState: `Active monitored state: ${newServer.healthScore}/100, ${dbList.length} databases`,
+      validation: `TDS handshake verified (${discoveredSpecs?.latencyMs || 2}ms), DMV diagnostic feeds active`,
+      status: 'SUCCESS',
+    });
+
+    return res.json({
+      success: true,
+      server: newServer,
+      servers: estateServers,
+      message: `SQL Server asset ${serverName} registered successfully into estate inventory.`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 
 // 9. LLM Provider Management & Local Air-Gapped Ollama API
 app.get('/api/dba/llm-provider', async (req, res) => {

@@ -33,7 +33,7 @@ export const SystemDocumentationModal: React.FC<SystemDocumentationModalProps> =
   isOpen,
   onClose
 }) => {
-  const [activeChapter, setActiveChapter] = useState<'architecture' | 'setup' | 'connectivity' | 'modes' | 'safety' | 'console' | 'runbooks' | 'airgapped'>('setup');
+  const [activeChapter, setActiveChapter] = useState<'architecture' | 'setup' | 'connectivity' | 'modes' | 'safety' | 'console' | 'runbooks' | 'airgapped' | 'assets'>('setup');
   const [copiedCodeSnippet, setCopiedCodeSnippet] = useState<string | null>(null);
   const [copiedFullDoc, setCopiedFullDoc] = useState(false);
 
@@ -165,6 +165,7 @@ GO
     { id: 'console', title: '6. Natural Language Copilot & AI Schema', icon: <Zap className="w-4 h-4" /> },
     { id: 'runbooks', title: '7. Production Operations Runbooks', icon: <FileText className="w-4 h-4" /> },
     { id: 'airgapped', title: '8. Local Server & Ollama (Zero Egress)', icon: <Lock className="w-4 h-4 text-emerald-400" /> },
+    { id: 'assets', title: '9. Adding SQL Server Assets & Discovery', icon: <Server className="w-4 h-4 text-cyan-400" /> },
   ];
 
   const fullMarkdownDocumentation = `# AI DBA COMMAND CENTER
@@ -885,6 +886,113 @@ PORT=3000`}</pre>
                     <p className="text-[11px] text-emerald-400 font-mono">
                       ✓ Open http://localhost:3000 in your browser. All features operate with zero WAN transmission!
                     </p>
+                  </div>
+                </div>
+
+              </div>
+            )}
+
+            {/* CHAPTER 9: ONBOARDING SQL SERVER ASSETS */}
+            {activeChapter === 'assets' && (
+              <div className="space-y-6">
+                <div className="border-b border-slate-800 pb-3 flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center space-x-2 text-xs font-mono text-cyan-400 uppercase tracking-wider mb-1">
+                      <Server className="w-3.5 h-3.5" />
+                      <span>Estate Inventory & Telemetry Onboarding</span>
+                    </div>
+                    <h3 className="text-xl font-bold text-white">
+                      Chapter 9: Adding & Onboarding SQL Server Assets
+                    </h3>
+                    <p className="text-slate-400 mt-1 text-xs">
+                      How to register on-premise, virtual machine, and cloud SQL Server instances into the AI DBA Command Center.
+                    </p>
+                  </div>
+                  <span className="text-[10px] font-mono px-2.5 py-1 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 font-bold shrink-0">
+                    SELF-SERVICE ONBOARDING
+                  </span>
+                </div>
+
+                {/* Workflow Summary */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] font-bold">1</span>
+                      <span>1. Least-Privilege User</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px]">
+                      Create <code className="text-cyan-300 font-mono">svc_ai_dba_agent</code> in SSMS with <code className="text-slate-300 font-mono">VIEW SERVER STATE</code> (No sysadmin).
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] font-bold">2</span>
+                      <span>2. Register via UI / API</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px]">
+                      Click <strong>+ Register SQL Server</strong> in Mode A (Executive) or Mode B (Senior DBA). Enter hostname, port, and databases.
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                    <div className="font-bold text-white flex items-center gap-1.5">
+                      <span className="w-4 h-4 rounded-full bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-[10px] font-bold">3</span>
+                      <span>3. Baseline Discovery</span>
+                    </div>
+                    <p className="text-slate-400 text-[11px]">
+                      Agent runs pre-flight probe, verifies Query Store, discovers storage LUNs, and starts 90-day moving baselines.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Step-by-Step Guide */}
+                <div className="space-y-4 text-xs">
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="font-bold text-white text-sm">Step 1: Network & Firewall Connectivity</h4>
+                    <p className="text-slate-300 leading-relaxed">
+                      Ensure the server running the AI DBA Command Center has TCP connectivity to the SQL Server port (default <code className="text-cyan-300 font-mono">1433</code>). For named instances, ensure the SQL Server Browser service (UDP <code className="text-cyan-300 font-mono">1434</code>) is reachable or specify the static port.
+                    </p>
+                  </div>
+
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-bold text-white text-sm">Step 2: Service Account Provisioning Script (T-SQL)</h4>
+                      <button 
+                        onClick={() => copySnippet(tsqlProvisioningScript, 'onboard_tsql')}
+                        className="text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                      >
+                        {copiedCodeSnippet === 'onboard_tsql' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>Copy Script</span>
+                      </button>
+                    </div>
+                    <p className="text-slate-400 text-[11px]">
+                      Execute this in SQL Server Management Studio (SSMS) on the target instance:
+                    </p>
+                    <pre className="bg-slate-900 p-3 rounded border border-slate-800 font-mono text-[11px] text-cyan-300 overflow-x-auto max-h-40">
+                      {tsqlProvisioningScript}
+                    </pre>
+                  </div>
+
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                    <h4 className="font-bold text-white text-sm">Step 3: Registration via REST API</h4>
+                    <p className="text-slate-300 leading-relaxed">
+                      You can automate asset onboarding in CI/CD or Terraform using the backend registration endpoint:
+                    </p>
+                    <pre className="bg-slate-900 p-3 rounded border border-slate-800 font-mono text-[11px] text-emerald-300 overflow-x-auto">{`POST /api/dba/servers
+Content-Type: application/json
+
+{
+  "name": "SQL-PROD-04",
+  "address": "sql-prod-04.corp.internal",
+  "port": 1433,
+  "role": "Payment Gateway & Settlement Hub",
+  "environment": "production",
+  "databases": ["PaymentsDB", "SettlementMart"],
+  "haArchitecture": "Always On Availability Groups",
+  "rpoMinutes": 5,
+  "rtoMinutes": 15
+}`}</pre>
                   </div>
                 </div>
 

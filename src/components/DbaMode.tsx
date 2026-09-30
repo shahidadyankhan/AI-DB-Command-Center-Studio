@@ -13,7 +13,8 @@ import {
   Activity,
   ArrowRight,
   ShieldAlert,
-  GitCommit
+  GitCommit,
+  Plus
 } from 'lucide-react';
 import { 
   ServerInstance, 
@@ -29,6 +30,7 @@ interface DbaModeProps {
   blockingChain: BlockingSession[];
   queryRegressions: QueryStoreRegression[];
   onRequestApproval: (rec: RecommendationItem) => void;
+  onOpenAddServer?: () => void;
 }
 
 export const DbaMode: React.FC<DbaModeProps> = ({
@@ -36,7 +38,8 @@ export const DbaMode: React.FC<DbaModeProps> = ({
   waitStats,
   blockingChain,
   queryRegressions,
-  onRequestApproval
+  onRequestApproval,
+  onOpenAddServer
 }) => {
   const [selectedServerId, setSelectedServerId] = useState<string>('sql-prod-01');
   const [copiedQueryId, setCopiedQueryId] = useState<number | null>(null);
@@ -89,6 +92,17 @@ export const DbaMode: React.FC<DbaModeProps> = ({
               )}
             </button>
           ))}
+
+          {onOpenAddServer && (
+            <button
+              onClick={onOpenAddServer}
+              className="px-2.5 py-1.5 rounded-md text-xs font-mono text-cyan-400 hover:text-cyan-300 hover:bg-slate-900 border border-cyan-800/60 transition flex items-center space-x-1 cursor-pointer"
+              title="Register a new SQL Server into monitored estate"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add</span>
+            </button>
+          )}
         </div>
       </div>
 

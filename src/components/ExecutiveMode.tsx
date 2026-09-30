@@ -10,7 +10,8 @@ import {
   Clock, 
   CheckCircle,
   FileText,
-  DollarSign
+  DollarSign,
+  Plus
 } from 'lucide-react';
 import { ServerInstance, Incident, RecommendationItem } from '../types/dba';
 
@@ -21,6 +22,7 @@ interface ExecutiveModeProps {
   onSelectServer: (server: ServerInstance) => void;
   onSelectIncident: (incident: Incident) => void;
   onRequestApproval: (rec: RecommendationItem) => void;
+  onOpenAddServer?: () => void;
 }
 
 export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
@@ -30,6 +32,7 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
   onSelectServer,
   onSelectIncident,
   onRequestApproval,
+  onOpenAddServer,
 }) => {
   const avgHealth = Math.round(
     servers.reduce((acc, s) => acc + s.healthScore, 0) / (servers.length || 1)
@@ -141,7 +144,18 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
               <Server className="w-4 h-4 text-cyan-400" />
               <span>Database Estate Inventory & Real-Time Status</span>
             </h3>
-            <span className="text-xs text-slate-400">Click server to inspect telemetry</span>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs text-slate-400 hidden sm:inline">Click server to inspect</span>
+              {onOpenAddServer && (
+                <button
+                  onClick={onOpenAddServer}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md shadow-cyan-600/20 transition cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Register SQL Server</span>
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
