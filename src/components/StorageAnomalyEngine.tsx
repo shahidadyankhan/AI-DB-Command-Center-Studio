@@ -38,6 +38,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
   const currentBaseline = baselines.find(b => b.id === selectedBaselineId) || baselines[0];
 
   const handleGenerateAiReport = async () => {
+    if (!currentBaseline) return;
     setIsGeneratingReport(true);
     try {
       const res = await fetch('/api/dba/storage-anomalies/deep-report', {
@@ -59,6 +60,16 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
     setCopiedScript(true);
     setTimeout(() => setCopiedScript(false), 2000);
   };
+
+  if (!currentBaseline) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400">
+        <HardDrive className="w-12 h-12 mx-auto text-slate-600 mb-3" />
+        <h3 className="text-lg font-bold text-white">No Storage Baselines Available</h3>
+        <p className="text-xs text-slate-400 mt-1">Register a SQL Server instance to establish automated capacity baselines.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -126,7 +137,10 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
         {baselines.map((b) => (
           <button
             key={b.id}
-            onClick={() => setSelectedBaselineId(b.id)}
+            onClick={() => {
+              setSelectedBaselineId(b.id);
+              setAiReport(null);
+            }}
             className={`px-4 py-2.5 rounded-xl border text-xs font-mono text-left transition cursor-pointer flex items-center space-x-3 shrink-0 ${
               selectedBaselineId === b.id
                 ? 'bg-amber-950/40 border-amber-500 text-amber-200 shadow-md shadow-amber-950'
@@ -302,7 +316,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
             </div>
 
             <div className="space-y-2 text-xs">
-              {currentBaseline.topTableConsumers.map((tbl, idx) => (
+              {(currentBaseline.topTableConsumers || []).map((tbl, idx) => (
                 <div key={idx} className={`p-3.5 rounded-xl border space-y-2 ${
                   tbl.isAnomalyCulprit ? 'bg-rose-950/20 border-rose-800/60' : 'bg-slate-950 border-slate-800'
                 }`}>
@@ -311,7 +325,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
                       <span className="font-mono font-bold text-white text-xs">{tbl.tableName}</span>
                       {tbl.isAnomalyCulprit && (
                         <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-rose-500 text-white font-bold animate-pulse">
-                          ANOMALY CULPRIT (+{tbl.growthPct30d}%)
+                          ANOMALY CULPRIT (+{tbl.growthPct30d ?? 0}%)
                         </span>
                       )}
                     </div>
@@ -324,16 +338,16 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px] text-slate-400">
                     <div>
-                      <span>Rows:</span> <strong className="text-slate-200">{tbl.rowCount.toLocaleString()}</strong>
+                      <span>Rows:</span> <strong className="text-slate-200">{(tbl.rowCount ?? 0).toLocaleString()}</strong>
                     </div>
                     <div>
-                      <span>30d Growth:</span> <strong className={tbl.growth30dGB > 100 ? 'text-rose-400' : 'text-slate-200'}>+{tbl.growth30dGB} GB</strong>
+                      <span>30d Growth:</span> <strong className={(tbl.growth30dGB ?? 0) > 100 ? 'text-rose-400' : 'text-slate-200'}>+{(tbl.growth30dGB ?? 0)} GB</strong>
                     </div>
                     <div>
                       <span>Partitioning:</span> <strong className={tbl.hasPartitioning ? 'text-emerald-400' : 'text-amber-400'}>{tbl.hasPartitioning ? 'YES' : 'NO'}</strong>
                     </div>
                     <div>
-                      <span>Compression:</span> <strong className={tbl.compressionType === 'NONE' ? 'text-rose-400' : 'text-emerald-400'}>{tbl.compressionType}</strong>
+                      <span>Compression:</span> <strong className={(tbl.compressionType || 'NONE') === 'NONE' ? 'text-rose-400' : 'text-emerald-400'}>{tbl.compressionType || 'NONE'}</strong>
                     </div>
                   </div>
                 </div>
@@ -351,33 +365,33 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-xs font-mono uppercase text-slate-400 font-bold">Recommended Remediation</span>
               <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
-                currentBaseline.recommendedAction.safetyLevel === 'RED' ? 'bg-rose-500 text-white' :
-                currentBaseline.recommendedAction.safetyLevel === 'AMBER' ? 'bg-amber-500 text-slate-950' :
+                (currentBaseline.recommendedAction?.safetyLevel || 'GREEN') === 'RED' ? 'bg-rose-500 text-white' :
+                (currentBaseline.recommendedAction?.safetyLevel || 'GREEN') === 'AMBER' ? 'bg-amber-500 text-slate-950' :
                 'bg-emerald-500 text-white'
               }`}>
-                {currentBaseline.recommendedAction.safetyLevel} GATE
+                {currentBaseline.recommendedAction?.safetyLevel || 'GREEN'} GATE
               </span>
             </div>
 
             <div>
               <h4 className="text-base font-bold text-white leading-snug">
-                {currentBaseline.recommendedAction.title}
+                {currentBaseline.recommendedAction?.title || 'Continuous Storage Monitoring Active'}
               </h4>
               <p className="text-xs text-slate-300 mt-1">
-                {currentBaseline.recommendedAction.why}
+                {currentBaseline.recommendedAction?.why || 'Volume capacity baseline is within expected operating limits.'}
               </p>
             </div>
 
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800 text-xs space-y-1 font-mono">
               <div className="text-emerald-400 font-bold">
-                ✓ {currentBaseline.recommendedAction.expectedBenefit}
+                ✓ {currentBaseline.recommendedAction?.expectedBenefit || 'Maintains healthy storage capacity margins.'}
               </div>
               <div className="text-slate-400 text-[11px]">
-                Rollback: {currentBaseline.recommendedAction.rollbackMethod}
+                Rollback: {currentBaseline.recommendedAction?.rollbackMethod || 'Standard DBA procedure.'}
               </div>
             </div>
 
-            {currentBaseline.recommendedAction.sqlScript && (
+            {currentBaseline.recommendedAction?.sqlScript && (
               <div className="space-y-1">
                 <div className="flex items-center justify-between text-xs text-slate-400">
                   <span>Executable SQL Script:</span>
@@ -395,13 +409,15 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
               </div>
             )}
 
-            <button
-              onClick={() => onRequestApproval(currentBaseline.recommendedAction)}
-              className="w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-amber-600/30"
-            >
-              <ShieldAlert className="w-4 h-4 text-slate-950" />
-              <span>Authorize Remediation ({currentBaseline.recommendedAction.safetyLevel})</span>
-            </button>
+            {currentBaseline.recommendedAction && (
+              <button
+                onClick={() => onRequestApproval(currentBaseline.recommendedAction)}
+                className="w-full py-2.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition flex items-center justify-center space-x-2 cursor-pointer shadow-lg shadow-amber-600/30"
+              >
+                <ShieldAlert className="w-4 h-4 text-slate-950" />
+                <span>Authorize Remediation ({currentBaseline.recommendedAction.safetyLevel || 'GREEN'})</span>
+              </button>
+            )}
           </div>
 
           {/* AI Generated Capacity Report Output */}
@@ -447,10 +463,10 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-xs space-y-2">
             <span className="font-bold text-slate-200 block">Root Cause & Architectural Assessment</span>
             <p className="text-slate-300 leading-relaxed text-[11px]">
-              {currentBaseline.rootCauseAnalysis}
+              {currentBaseline.rootCauseAnalysis || `Capacity baseline established for ${currentBaseline.serverName}. Storage ingestion rate is nominal.`}
             </p>
             <div className="pt-2 border-t border-slate-800 text-[11px] text-rose-300">
-              <strong>Potential Business Impact:</strong> {currentBaseline.potentialImpact}
+              <strong>Potential Business Impact:</strong> {currentBaseline.potentialImpact || `Zero immediate operational risk. Unallocated buffer is ${currentBaseline.freeGB} GB.`}
             </div>
           </div>
 

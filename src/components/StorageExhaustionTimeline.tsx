@@ -233,9 +233,9 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
         </div>
       </div>
 
-      {/* At-Risk Volume Tabs */}
+      {/* Monitored Volume Tabs */}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1 no-scrollbar">
-        {atRiskBaselines.map((b) => (
+        {baselines.map((b) => (
           <button
             key={b.id}
             onClick={() => setSelectedId(b.id)}
@@ -248,10 +248,14 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
             <div className="text-left">
               <div className="font-bold flex items-center gap-1.5">
                 <span>{b.serverName} • {b.databaseName}</span>
-                <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                {b.isAnomaly ? (
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                ) : (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                )}
               </div>
               <div className="text-[10px] text-slate-400">
-                Mount: {b.volumeMount} • <strong className="text-rose-400">{b.daysTo80Pct}d to 80%</strong> • z-score: +{b.zScore}
+                Mount: {b.volumeMount} • <strong className={b.daysTo80Pct <= 90 ? "text-rose-400" : "text-emerald-400"}>{b.daysTo80Pct}d to 80%</strong> • z-score: +{b.zScore}
               </div>
             </div>
           </button>
@@ -270,7 +274,9 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-0.5 bg-rose-500 border-t-2 border-dashed border-rose-500" />
-              <span className="text-rose-400 font-bold">Current Anomaly Surge (+{activeBaseline.growthVelocitySurgePct}%)</span>
+              <span className="text-rose-400 font-bold">
+                {activeBaseline.isAnomaly ? `Current Anomaly Surge (+${activeBaseline.growthVelocitySurgePct}%)` : `Current Baseline Velocity (${activeBaseline.currentDailyGrowthGB} GB/day)`}
+              </span>
             </div>
             <div className="flex items-center space-x-1.5">
               <span className="w-3 h-0.5 bg-slate-500" />

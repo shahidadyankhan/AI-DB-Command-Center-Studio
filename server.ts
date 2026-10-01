@@ -177,8 +177,207 @@ Always output structured JSON conforming to the section 28 response schema.
 `;
 
 // Helper for deterministic fallback responses if Gemini API is unavailable or rates limited
-function generateExpertDbaResponse(prompt: string, mode: string = 'dba'): DbaAgentResponse {
+// Helper for deterministic fallback responses if Gemini API is unavailable or rates limited
+function generateExpertDbaResponse(prompt: string, mode: string = 'dba', serverId?: string): DbaAgentResponse {
   const p = prompt.toLowerCase();
+
+  // 1. Identify if a specific server is targeted (either via serverId or by name/id in prompt)
+  const targetServer = (serverId && serverId !== 'ALL')
+    ? estateServers.find((s: any) => s.id === serverId || s.name.toLowerCase() === serverId.toLowerCase())
+    : estateServers.find((s: any) => {
+        const nameMatch = p.includes(s.name.toLowerCase());
+        const idMatch = p.includes(s.id.toLowerCase());
+        return nameMatch || idMatch;
+      });
+
+  const targetBaseline = targetServer
+    ? estateStorageBaselines.find((b: any) => b.serverId === targetServer.id || b.serverName.toLowerCase() === targetServer.name.toLowerCase())
+    : estateStorageBaselines.find((b: any) => p.includes(b.serverName.toLowerCase()) || p.includes(b.id.toLowerCase()));
+
+  // If a specific server is asked about (e.g. newly added instance or specific monitored server)
+  if (targetServer && targetServer.id !== 'sql-prod-01' && targetServer.id !== 'sql-prod-03') {
+    const isStorageQuery = p.includes('storage') || p.includes('capacity') || p.includes('disk') || p.includes('growth') || p.includes('exhaustion') || mode === 'storage-anomalies';
+    
+    if (isStorageQuery && targetBaseline) {
+      if (targetBaseline.isAnomaly) {
+        return {
+          finding: `Critical storage growth anomaly on ${targetServer.name} (${targetBaseline.databaseName}): volume ${targetBaseline.volumeMount} is growing at ${targetBaseline.currentDailyGrowthGB} GB/day (+${targetBaseline.growthVelocitySurgePct}% vs baseline) with z-score ${targetBaseline.zScore}.`,
+          evidence: [
+            `Volume ${targetBaseline.volumeMount}: ${targetBaseline.usedGB} GB used of ${targetBaseline.totalCapacityGB} GB (${targetBaseline.utilizationPct}%).`,
+            `Observed daily growth: ${targetBaseline.currentDailyGrowthGB} GB/day (baseline: ${targetBaseline.baselineDailyGrowthGB} GB/day).`,
+            `Primary culprit table: ${targetBaseline.topTableConsumers?.[0]?.tableName || 'Analytical Tables'} (${targetBaseline.topTableConsumers?.[0]?.sizeGB || 280} GB).`,
+            `Projected timeline: 80% threshold reached in ${targetBaseline.daysTo80Pct} days (${targetBaseline.projectedDate80}); complete exhaustion in ${targetBaseline.daysTo100Pct} days.`,
+          ],
+          analysis: targetBaseline.rootCauseAnalysis || `Non-linear ingestion surge detected on ${targetServer.name} without automated partition purge or data compression.`,
+          risk: {
+            score: 78,
+            level: 'HIGH',
+            businessImpact: targetBaseline.potentialImpact || 'Risk of database suspension and autogrowth stall if disk capacity is not remediated.',
+          },
+          recommendations: [
+            targetBaseline.recommendedAction || {
+              id: `REC-STORAGE-${targetServer.id}`,
+              title: `Deploy Partition Compression on ${targetServer.name}`,
+              why: `Reclaims space on volume ${targetBaseline.volumeMount}.`,
+              evidence: `z-score deviation of +${targetBaseline.zScore}.`,
+              expectedBenefit: 'Reclaims uncompressed disk capacity.',
+              risk: 'LOW',
+              implementationComplexity: 'MEDIUM',
+              rollbackMethod: 'Standard rollback.',
+              validationMethod: 'sys.dm_os_volume_stats query.',
+              priority: 'HIGH',
+              safetyLevel: 'AMBER',
+              targetServer: targetServer.name,
+              targetDatabase: targetBaseline.databaseName,
+            }
+          ],
+          automation: 'AI can trigger automated weekly capacity projections.',
+          approval: { required: true, level: 'AMBER', reason: 'Capacity remediation requires DBA authorization.' },
+          validation: 'Confirm free space margin extends > 90 days post-remediation.',
+          audit: 'Log storage telemetry, baseline metrics, and approval action.',
+          confidence: { level: 'HIGH', pct: 94, rationale: '90-day linear regression and statistical z-score telemetry.' },
+          sourceMode: mode,
+        };
+      } else {
+        return {
+          finding: `${targetServer.name} storage baseline is NOMINAL: volume ${targetBaseline.volumeMount} is ${targetBaseline.utilizationPct}% used with ${targetBaseline.freeGB} GB free buffer and ${targetBaseline.daysTo80Pct} days to 80% threshold.`,
+          evidence: [
+            `Total volume capacity: ${targetBaseline.totalCapacityGB} GB; Used: ${targetBaseline.usedGB} GB (${targetBaseline.utilizationPct}%).`,
+            `Current daily ingestion: ${targetBaseline.currentDailyGrowthGB} GB/day vs baseline ${targetBaseline.baselineDailyGrowthGB} GB/day (nominal z-score: ${targetBaseline.zScore}).`,
+            `Available free buffer: ${targetBaseline.freeGB} GB (${Math.round((targetBaseline.freeGB / targetBaseline.totalCapacityGB) * 100)}% available).`,
+            `Projected 80% threshold date: ${targetBaseline.projectedDate80} (${targetBaseline.daysTo80Pct} days runway).`,
+          ],
+          analysis: `Statistical moving baseline confirms ${targetServer.name} storage telemetry is within normal standard deviation. No capacity exhaustion risks detected for the active planning horizon.`,
+          risk: {
+            score: 12,
+            level: 'LOW',
+            businessImpact: 'Capacity buffer is healthy. Zero operational risk or SLA exposure.',
+          },
+          recommendations: [
+            targetBaseline.recommendedAction || {
+              id: `REC-MON-${targetServer.id}`,
+              title: `Maintain Scheduled Index Maintenance on ${targetServer.name}`,
+              why: 'Standard operational maintenance prevents extent fragmentation.',
+              evidence: 'Current storage metrics are within normal variance.',
+              expectedBenefit: 'Sustained throughput and linear storage growth.',
+              risk: 'LOW',
+              implementationComplexity: 'LOW',
+              rollbackMethod: 'N/A',
+              validationMethod: 'sys.dm_db_index_physical_stats.',
+              priority: 'LOW',
+              safetyLevel: 'GREEN',
+              targetServer: targetServer.name,
+              targetDatabase: targetBaseline.databaseName,
+            }
+          ],
+          automation: 'Continuous telemetry collection and predictive baseline comparison.',
+          approval: { required: false, level: 'GREEN', reason: 'Read-only telemetry monitoring.' },
+          validation: 'Telemetry verified nominal against historical baseline.',
+          audit: 'Recorded in automated estate inventory.',
+          confidence: { level: 'HIGH', pct: 96, rationale: 'Live DMV volume telemetry and moving linear regression.' },
+          sourceMode: mode,
+        };
+      }
+    }
+
+    // Server general performance / diagnostic status query
+    if (targetServer.status === 'healthy') {
+      return {
+        finding: `${targetServer.name} is in HEALTHY operational status with a health score of ${targetServer.healthScore}/100. All live telemetry and diagnostic parameters are nominal.`,
+        evidence: [
+          `CPU Utilization: ${targetServer.cpuUsagePct}% (OS: ${targetServer.osCpuUsagePct}%).`,
+          `Page Life Expectancy: ${targetServer.pageLifeExpectancySec}s (Buffer pool residency nominal).`,
+          `Active User Sessions: ${targetServer.activeConnections}; Blocked Sessions: ${targetServer.blockedSessionsCount}.`,
+          `I/O Latency: ${targetServer.avgReadLatencyMs}ms read, ${targetServer.avgWriteLatencyMs}ms write.`,
+          `Telemetry Stream: ${targetServer.isRealTime ? `Active real-time (${targetServer.telemetryMode})` : 'Normal baseline'}.`,
+        ],
+        analysis: `${targetServer.name} workload is executing within designed capacity and performance thresholds. Zero lock blocking chains, query regressions, or memory grant resource starvation detected.`,
+        risk: {
+          score: 8,
+          level: 'LOW',
+          businessImpact: 'Zero production risk. System fully compliant with performance SLAs.',
+        },
+        recommendations: [
+          {
+            id: `REC-MON-${targetServer.id}`,
+            title: `Routine Health Verification for ${targetServer.name}`,
+            why: 'Maintain automated telemetry streaming and proactive threshold alerting.',
+            evidence: `Current health score is ${targetServer.healthScore}/100 with 0 blocked sessions.`,
+            expectedBenefit: 'Guarantees continuous 99.99% availability SLA.',
+            risk: 'LOW',
+            implementationComplexity: 'LOW',
+            rollbackMethod: 'N/A',
+            validationMethod: 'sys.dm_server_services and DMV status checks.',
+            priority: 'LOW',
+            safetyLevel: 'GREEN',
+            targetServer: targetServer.name,
+          }
+        ],
+        automation: 'Autonomous DMV metric sampling and real-time streaming.',
+        approval: { required: false, level: 'GREEN', reason: 'Diagnostic query.' },
+        validation: 'Continuous real-time telemetry heartbeat verified.',
+        audit: 'Estate inventory audit record confirmed.',
+        confidence: { level: 'HIGH', pct: 98, rationale: 'Direct live telemetry correlation from server DMV streams.' },
+        sourceMode: mode,
+      };
+    }
+  }
+
+  // 2. Storage / Capacity General Estate Query
+  if (p.includes('capacity') || p.includes('storage') || (p.includes('predict') && !p.includes('blocking')) || mode === 'storage-anomalies' || mode === 'predictive') {
+    const anomalies = estateStorageBaselines.filter((b: any) => b.isAnomaly);
+    const nominal = estateStorageBaselines.filter((b: any) => !b.isAnomaly);
+
+    return {
+      finding: anomalies.length > 0
+        ? `Storage Anomaly Engine identified ${anomalies.length} capacity anomaly across ${estateStorageBaselines.length} monitored volumes: ${anomalies.map((a: any) => `${a.serverName} (${a.volumeMount}: +${a.growthVelocitySurgePct}% surge)`).join(', ')}. All other ${nominal.length} volumes maintain healthy margins (>180 days).`
+        : `All ${estateStorageBaselines.length} database volumes across the estate are operating within normal baseline capacity growth margins. Zero capacity anomalies detected.`,
+      evidence: [
+        ...anomalies.map((a: any) => `${a.serverName}: Volume ${a.volumeMount} current free space is ${Math.round((a.freeGB / a.totalCapacityGB) * 100)}% (${a.usedGB} GB used of ${a.totalCapacityGB} GB); growth velocity +${a.growthVelocitySurgePct}% MoM projects 80% full in ${a.daysTo80Pct} days.`),
+        ...nominal.slice(0, 3).map((n: any) => `${n.serverName}: Volume ${n.volumeMount} is healthy (${n.utilizationPct}% used, ${n.freeGB} GB free buffer, ${n.daysTo80Pct} days to 80%).`),
+      ],
+      analysis: anomalies.length > 0
+        ? `Analytical data mart ingestion on ${anomalies[0]?.serverName} is driving non-linear disk utilization without automated partition compression or data retention purge routines. Newly onboarded instances and production OLTP instances maintain stable linear trajectories.`
+        : 'Predictive linear regression indicates all estate volumes have sufficient storage allocation buffer for the active quarter.',
+      risk: {
+        score: anomalies.length > 0 ? 68 : 15,
+        level: anomalies.length > 0 ? 'HIGH' : 'LOW',
+        businessImpact: anomalies.length > 0
+          ? `Potential database suspension on ${anomalies[0]?.serverName} during month-end reporting if capacity is not expanded or compressed.`
+          : 'Zero immediate capacity risk across monitored estate.',
+      },
+      recommendations: [
+        ...(anomalies.length > 0 ? [anomalies[0].recommendedAction] : []),
+        {
+          id: 'REC-STORAGE-GLOBAL',
+          title: 'Establish Continuous Automated Storage Telemetry & Anomaly Baselines',
+          why: 'Multi-tier storage telemetry baselines prevent unexpected out-of-space incidents.',
+          evidence: `90-day moving regression active across ${estateStorageBaselines.length} database volumes.`,
+          expectedBenefit: 'Guarantees minimum 60-day advance notice prior to any volume threshold breaches.',
+          risk: 'LOW',
+          implementationComplexity: 'LOW',
+          rollbackMethod: 'N/A',
+          validationMethod: 'Storage Anomaly Engine telemetry check.',
+          priority: 'MEDIUM',
+          safetyLevel: 'GREEN',
+        }
+      ],
+      automation: 'Automated weekly capacity projection report generation sent to IT Infrastructure.',
+      approval: {
+        required: anomalies.length > 0,
+        level: anomalies.length > 0 ? 'AMBER' : 'GREEN',
+        reason: 'Infrastructure resource allocation requires engineering lead approval.',
+      },
+      validation: 'Re-run capacity forecast model post-provisioning to confirm >180 days margin.',
+      audit: 'Log capacity forecast metrics, assumptions, and hardware ticket ID.',
+      confidence: {
+        level: 'HIGH',
+        pct: 92,
+        rationale: 'R-squared value of 0.94 on 90-day storage consumption telemetry.',
+      },
+      sourceMode: mode,
+    };
+  }
   
   if (p.includes('unhealthy') || p.includes('estate') || p.includes('health') || mode === 'executive') {
     return {
@@ -460,16 +659,34 @@ app.post('/api/dba/query', async (req, res) => {
         name: s.name,
         role: s.role,
         healthScore: s.healthScore,
+        status: s.status,
         cpuUsagePct: s.cpuUsagePct,
         pageLifeExpectancySec: s.pageLifeExpectancySec,
         avgReadLatencyMs: s.avgReadLatencyMs,
         blockedSessionsCount: s.blockedSessionsCount,
         daysTo80PctDisk: s.daysTo80PctDisk,
         alwaysOnStatus: s.alwaysOnStatus,
+        isRealTime: s.isRealTime,
+        telemetryMode: s.telemetryMode,
       })),
       activeIncidents: estateIncidents.filter((i: any) => i.status === 'ACTIVE'),
       blockingChain: estateBlockingChain,
       queryRegressions: MOCK_QUERY_REGRESSIONS,
+      storageBaselines: estateStorageBaselines.map((b: any) => ({
+        id: b.id,
+        serverId: b.serverId,
+        serverName: b.serverName,
+        databaseName: b.databaseName,
+        volumeMount: b.volumeMount,
+        utilizationPct: b.utilizationPct,
+        currentDailyGrowthGB: b.currentDailyGrowthGB,
+        baselineDailyGrowthGB: b.baselineDailyGrowthGB,
+        growthVelocitySurgePct: b.growthVelocitySurgePct,
+        zScore: b.zScore,
+        isAnomaly: b.isAnomaly,
+        daysTo80Pct: b.daysTo80Pct,
+        daysTo100Pct: b.daysTo100Pct,
+      })),
       operatingMode: mode,
     };
 
@@ -542,7 +759,7 @@ Return a valid JSON object matching:
     }
 
     // Deterministic expert DBA fallback
-    const fallbackResponse = generateExpertDbaResponse(prompt, mode);
+    const fallbackResponse = generateExpertDbaResponse(prompt, mode, serverId);
     return res.json({
       ...fallbackResponse,
       llmProvider: 'deterministic-expert-fallback',
@@ -898,41 +1115,74 @@ app.post('/api/dba/storage-anomalies/deep-report', async (req, res) => {
       return res.json(parsedReport);
     }
 
-    // Deterministic fallback report
+    // Deterministic fallback report dynamically tailored to the target baseline
+    const isTargetAnomaly = Boolean(target.isAnomaly);
+    const topConsumer = target.topTableConsumers?.[0] || {
+      tableName: `dbo.${target.databaseName}_Master`,
+      sizeGB: Math.round(target.usedGB * 0.4),
+      pctOfDatabase: 40,
+      growth30dGB: Math.round(target.currentDailyGrowthGB * 5),
+    };
+
     return res.json({
-      executiveSummary: `Critical storage growth anomaly detected on ${target.serverName} (${target.databaseName}). Volume ${target.volumeMount} is growing at ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}% vs baseline) with a statistically significant z-score of ${target.zScore}.`,
-      statisticalAnalysis: `Moving 90-day baseline was established at ${target.baselineDailyGrowthGB} GB/day (standard deviation: 6.7 GB). The current rate of ${target.currentDailyGrowthGB} GB/day exceeds 3.8 standard deviations, confirming a non-linear ingestion surge.`,
+      executiveSummary: isTargetAnomaly
+        ? `Critical storage growth anomaly detected on ${target.serverName} (${target.databaseName}). Volume ${target.volumeMount} is growing at ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}% vs baseline) with a statistically significant z-score of ${target.zScore}.`
+        : `Storage growth baseline verified for ${target.serverName} (${target.databaseName}). Volume ${target.volumeMount} is operating within nominal statistical variance at ${target.currentDailyGrowthGB} GB/day (${target.utilizationPct}% utilized) with z-score ${target.zScore}.`,
+      statisticalAnalysis: isTargetAnomaly
+        ? `Moving 90-day baseline was established at ${target.baselineDailyGrowthGB} GB/day. The current rate of ${target.currentDailyGrowthGB} GB/day represents a +${target.growthVelocitySurgePct}% velocity surge (z-score: +${target.zScore}), confirming a non-linear ingestion anomaly.`
+        : `Moving 90-day baseline is established at ${target.baselineDailyGrowthGB} GB/day. Current ingestion rate of ${target.currentDailyGrowthGB} GB/day is well within normal variance (z-score: ${target.zScore}). Linear regression indicates ${target.daysTo80Pct} days before reaching the 80% advisory threshold.`,
       predictedTimelines: {
-        threshold80: `Breaching 80% (4,160 GB) in ${target.daysTo80Pct} day(s) on ${target.projectedDate80}.`,
-        threshold90: `Breaching 90% (4,680 GB) in ${target.daysTo90Pct} days on ${target.projectedDate90}.`,
-        threshold100: `Complete physical disk exhaustion (5,200 GB) in ${target.daysTo100Pct} days on ${target.projectedDate100}.`,
+        threshold80: `Breaching 80% (${Math.round(target.totalCapacityGB * 0.8).toLocaleString()} GB) in ${target.daysTo80Pct} day(s) on ${target.projectedDate80}.`,
+        threshold90: `Breaching 90% (${Math.round(target.totalCapacityGB * 0.9).toLocaleString()} GB) in ${target.daysTo90Pct} days on ${target.projectedDate90}.`,
+        threshold100: `Complete physical disk exhaustion (${target.totalCapacityGB.toLocaleString()} GB) in ${target.daysTo100Pct} days on ${target.projectedDate100}.`,
       },
-      tableBreakdown: `The primary culprit is ${target.topTableConsumers[0]?.tableName}, which accounts for ${target.topTableConsumers[0]?.sizeGB} GB (${target.topTableConsumers[0]?.pctOfDatabase}% of database) and added ${target.topTableConsumers[0]?.growth30dGB} GB over the past 30 days due to uncompressed raw JSON payload streaming.`,
-      technicalImpact: `When disk utilization reaches 100%, SQL Server will fail to allocate new extents, causing data file autogrowth to stall. Transactions requiring page allocations will abort with error 1105 (Could not allocate space for object in database), freezing write traffic.`,
-      businessImpact: `Halts executive reporting and billing reconcile pipelines. Potential SLA penalty of $12,000/hour during month-end financial closing.`,
-      rankedRemediations: [
-        {
-          step: 1,
-          action: 'Enable PAGE or COLUMNSTORE Data Compression on historical partitions',
-          benefit: 'Reclaims approximately 920 GB of uncompressed storage immediately.',
-          safetyLevel: 'AMBER',
-          script: `ALTER TABLE ${target.topTableConsumers[0]?.tableName} REBUILD WITH (DATA_COMPRESSION = PAGE, ONLINE = ON);`,
-        },
-        {
-          step: 2,
-          action: 'Deploy automated 90-day retention partition purge job',
-          benefit: 'Permanently caps ongoing database growth to < 14 GB/day.',
-          safetyLevel: 'AMBER',
-          script: `DELETE TOP (50000) FROM ${target.topTableConsumers[0]?.tableName} WHERE EventTimestamp < DATEADD(DAY, -90, GETUTCDATE());`,
-        },
-        {
-          step: 3,
-          action: 'Request +2.0 TB SAN LUN storage expansion on volume ' + target.volumeMount,
-          benefit: 'Provides 180+ days of buffer margin for seasonal data spikes.',
-          safetyLevel: 'AMBER',
-          script: '-- Engage SAN Administrator to expand virtual disk volume L:\\Data',
-        },
-      ],
+      tableBreakdown: `Primary space consumer is ${topConsumer.tableName}, which accounts for ${topConsumer.sizeGB} GB (${topConsumer.pctOfDatabase}% of database) and added ${topConsumer.growth30dGB} GB over the past 30 days.`,
+      technicalImpact: isTargetAnomaly
+        ? `When disk utilization reaches 100%, SQL Server will fail to allocate new extents, causing data file autogrowth to stall. Transactions requiring page allocations will abort with error 1105 (Could not allocate space for object in database), freezing write traffic.`
+        : `Nominal operating margins. Autogrowth extents expand without thread contention. Free space buffer is currently ${target.freeGB} GB (${Math.round((target.freeGB / target.totalCapacityGB) * 100)}% available).`,
+      businessImpact: isTargetAnomaly
+        ? `Halts reporting pipelines and database transactions on ${target.databaseName}. Potential SLA breach if capacity is not expanded prior to ${target.projectedDate80}.`
+        : `Zero immediate operational risk or SLA impact. Next capacity review scheduled according to standard quarterly planning cadence.`,
+      rankedRemediations: isTargetAnomaly
+        ? [
+            {
+              step: 1,
+              action: `Enable PAGE or COLUMNSTORE Data Compression on ${topConsumer.tableName}`,
+              benefit: `Reclaims approximately ${Math.round(topConsumer.sizeGB * 0.45)} GB of storage immediately.`,
+              safetyLevel: 'AMBER',
+              script: `ALTER TABLE ${topConsumer.tableName} REBUILD WITH (DATA_COMPRESSION = PAGE, ONLINE = ON);`,
+            },
+            {
+              step: 2,
+              action: 'Deploy automated retention partition purge job',
+              benefit: `Caps ongoing database growth to < ${Math.round(target.baselineDailyGrowthGB * 1.1)} GB/day.`,
+              safetyLevel: 'AMBER',
+              script: `DELETE TOP (50000) FROM ${topConsumer.tableName} WHERE EventTimestamp < DATEADD(DAY, -90, GETUTCDATE());`,
+            },
+            {
+              step: 3,
+              action: 'Request SAN LUN storage expansion on volume ' + target.volumeMount,
+              benefit: 'Provides 180+ days of buffer margin for seasonal data spikes.',
+              safetyLevel: 'AMBER',
+              script: `-- Request +1.0 TB expansion on ${target.volumeMount} via SAN Administrator console`,
+            },
+          ]
+        : [
+            {
+              step: 1,
+              action: `Maintain standard index and statistics maintenance routines on ${target.serverName}`,
+              benefit: 'Prevents index fragmentation and internal extent bloat.',
+              safetyLevel: 'GREEN',
+              script: `ALTER INDEX ALL ON ${topConsumer.tableName} REORGANIZE;`,
+            },
+            {
+              step: 2,
+              action: `Quarterly capacity allocation review before ${target.projectedDate80}`,
+              benefit: `Maintains >${target.daysTo80Pct} days of operational runway.`,
+              safetyLevel: 'GREEN',
+              script: '-- Scheduled quarterly storage review task',
+            },
+          ],
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1263,13 +1513,15 @@ app.post('/api/dba/servers', async (req, res) => {
     ];
 
     // Create baseline storage volume
-    const baselineId = `BASE-${serverName}-DATA`;
-    estateStorageBaselines = estateStorageBaselines.filter((b: any) => b.id !== baselineId);
+    const baselineId = `BASE-${serverId.toUpperCase()}-DATA`;
+    estateStorageBaselines = estateStorageBaselines.filter((b: any) => b.id !== baselineId && b.serverId !== serverId);
     estateStorageBaselines.push({
       id: baselineId,
+      serverId,
       serverName,
       databaseName: dbList[0]?.name || 'PrimaryDB',
       volumeMount: 'D:\\Data',
+      fileType: 'DATA_MDF',
       totalCapacityGB: 2048,
       usedGB: 680,
       freeGB: 1368,
@@ -1292,31 +1544,53 @@ app.post('/api/dba/servers', async (req, res) => {
         { date: 'Day -14', usedGB: 660, baselineGB: 660, isForecast: false },
         { date: 'Day -7', usedGB: 670, baselineGB: 670, isForecast: false },
         { date: 'Today', usedGB: 680, baselineGB: 680, isForecast: false },
+        { date: '+30 Days', usedGB: 833, baselineGB: 784, projectedGB: 833, isForecast: true },
+        { date: '+60 Days', usedGB: 986, baselineGB: 888, projectedGB: 986, isForecast: true },
+        { date: '80% (Apr 2027)', usedGB: 1638, baselineGB: 1200, projectedGB: 1638, isForecast: true },
       ],
       topTableConsumers: [
         {
           tableName: `dbo.${dbList[0]?.name || 'Core'}_Master`,
+          schema: 'dbo',
           sizeGB: 280,
           growth30dGB: 14,
+          growthPct30d: 5.2,
           pctOfDatabase: 41.2,
-          isPartitioned: false,
-          compressionType: 'NONE',
+          rowCount: 45000000,
+          hasPartitioning: false,
+          compressionType: 'PAGE',
+          isAnomalyCulprit: false,
+        },
+        {
+          tableName: `dbo.${dbList[0]?.name || 'Core'}_Transactions`,
+          schema: 'dbo',
+          sizeGB: 160,
+          growth30dGB: 19,
+          growthPct30d: 13.5,
+          pctOfDatabase: 23.5,
+          rowCount: 28500000,
+          hasPartitioning: false,
+          compressionType: 'ROW',
+          isAnomalyCulprit: false,
         },
       ],
+      rootCauseAnalysis: `Storage baseline established for ${serverName}. Telemetry streaming indicates daily growth velocity (${5.1} GB/day) is well within historical standard deviation of baseline (${4.8} GB/day). No statistical anomaly detected.`,
+      potentialImpact: `Volume capacity is healthy with 1,368 GB free (66.8% unallocated). Projected buffer margin exceeds 185 days before reaching the 80% operational advisory threshold.`,
       recommendedAction: {
-        id: `REC-ONBOARD-${serverName}`,
-        title: `Verify Backup Integrity & Baseline for ${serverName}`,
-        why: 'Initial asset onboarding requires standard verification of maintenance plans and backup schedules.',
-        evidence: 'Newly registered SQL Server instance.',
-        expectedBenefit: 'Guarantees enterprise RPO/RTO SLA adherence.',
+        id: `REC-STORAGE-${serverId.toUpperCase()}`,
+        title: `Establish Automated Partition Compression & Maintenance on ${serverName}`,
+        why: `Continuous monitoring and baseline indexing on ${dbList[0]?.name || 'PrimaryDB'} prevents premature volume exhaustion.`,
+        evidence: `Initial storage baseline active: 33.2% utilization on D:\\Data. Projected 80% threshold in 185 days.`,
+        expectedBenefit: 'Maintains optimal read/write IO throughput and keeps database growth linear.',
         risk: 'LOW',
         implementationComplexity: 'LOW',
-        rollbackMethod: 'None required.',
-        validationMethod: 'sys.dm_server_services verification.',
+        rollbackMethod: 'ALTER INDEX REORGANIZE rollback if IO contention occurs.',
+        validationMethod: 'sys.dm_db_index_physical_stats fragmentation analysis.',
         priority: 'MEDIUM',
         safetyLevel: 'GREEN',
+        sqlScript: `ALTER INDEX ALL ON dbo.${dbList[0]?.name || 'Core'}_Master REBUILD WITH (ONLINE = ON, DATA_COMPRESSION = PAGE);`,
         targetServer: serverName,
-        targetDatabase: dbList[0]?.name || 'master',
+        targetDatabase: dbList[0]?.name || 'PrimaryDB',
       },
     });
 
@@ -1475,6 +1749,76 @@ app.post('/api/dba/telemetry/push', (req, res) => {
     // Update blocking chain if provided
     if (Array.isArray(blockingSessions) && blockingSessions.length > 0) {
       estateBlockingChain = blockingSessions;
+    }
+
+    // Ensure storage baseline exists for push agent instance in Storage Anomaly Engine
+    const existingBaseline = estateStorageBaselines.find((b: any) => b.serverId === targetServer.id || b.serverName === targetServer.name);
+    if (!existingBaseline) {
+      estateStorageBaselines.push({
+        id: `BASE-${targetServer.name}-DATA`,
+        serverId: targetServer.id,
+        serverName: targetServer.name,
+        databaseName: targetServer.databases?.[0]?.name || 'ProductionDB',
+        volumeMount: 'D:\\Data',
+        fileType: 'DATA_MDF',
+        totalCapacityGB: 2048,
+        usedGB: 680,
+        freeGB: 1368,
+        utilizationPct: 33.2,
+        baselineDailyGrowthGB: 4.8,
+        currentDailyGrowthGB: 5.1,
+        growthVelocitySurgePct: 6.2,
+        zScore: 0.28,
+        daysTo80Pct: 185,
+        projectedDate80: 'Apr 20, 2027',
+        daysTo90Pct: 228,
+        projectedDate90: 'Jun 02, 2027',
+        daysTo100Pct: 270,
+        projectedDate100: 'Jul 14, 2027',
+        isAnomaly: false,
+        anomalySeverity: 'NORMAL',
+        historicalDataPoints: [
+          { date: 'Day -28', usedGB: 640, baselineGB: 640, isForecast: false },
+          { date: 'Day -21', usedGB: 650, baselineGB: 650, isForecast: false },
+          { date: 'Day -14', usedGB: 660, baselineGB: 660, isForecast: false },
+          { date: 'Day -7', usedGB: 670, baselineGB: 670, isForecast: false },
+          { date: 'Today', usedGB: 680, baselineGB: 680, isForecast: false },
+          { date: '+30 Days', usedGB: 833, baselineGB: 784, projectedGB: 833, isForecast: true },
+          { date: '+60 Days', usedGB: 986, baselineGB: 888, projectedGB: 986, isForecast: true },
+          { date: '80% (Apr 2027)', usedGB: 1638, baselineGB: 1200, projectedGB: 1638, isForecast: true },
+        ],
+        topTableConsumers: [
+          {
+            tableName: `dbo.${targetServer.databases?.[0]?.name || 'ProductionDB'}_Master`,
+            schema: 'dbo',
+            sizeGB: 280,
+            growth30dGB: 14,
+            growthPct30d: 5.2,
+            pctOfDatabase: 41.2,
+            rowCount: 45000000,
+            hasPartitioning: false,
+            compressionType: 'PAGE',
+            isAnomalyCulprit: false,
+          },
+        ],
+        rootCauseAnalysis: `Storage baseline established for ${targetServer.name}. Telemetry streaming indicates normal extent allocations.`,
+        potentialImpact: `Storage capacity buffer is nominal with 1,368 GB free. Zero capacity risk detected.`,
+        recommendedAction: {
+          id: `REC-STORAGE-${targetServer.name}`,
+          title: `Automated Capacity Monitoring & Defrag Baseline for ${targetServer.name}`,
+          why: `Volume D:\\Data verified healthy. Automated baselining active.`,
+          evidence: `Current disk utilization is 33.2% with 185 days runway to 80% threshold.`,
+          expectedBenefit: 'Maintains long-term capacity runway.',
+          risk: 'LOW',
+          implementationComplexity: 'LOW',
+          rollbackMethod: 'N/A',
+          validationMethod: 'sys.dm_os_volume_stats query.',
+          priority: 'LOW',
+          safetyLevel: 'GREEN',
+          targetServer: targetServer.name,
+          targetDatabase: targetServer.databases?.[0]?.name || 'ProductionDB',
+        },
+      });
     }
 
     return res.json({
