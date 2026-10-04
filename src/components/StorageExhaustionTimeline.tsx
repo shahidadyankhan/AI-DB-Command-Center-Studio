@@ -80,27 +80,27 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
     }> = [];
 
     // Historical 8 points
-    const hist = activeBaseline.historicalDataPoints.filter(p => !p.isForecast);
+    const hist = (activeBaseline.historicalDataPoints || []).filter(p => !p.isForecast);
     hist.forEach((pt, idx) => {
       const dayOffset = (idx - hist.length + 1) * 7;
-      const actual = pt.usedGB;
-      const base = pt.baselineGB;
+      const actual = pt.usedGB || 0;
+      const base = pt.baselineGB || actual;
       data.push({
         date: pt.date,
         dayIndex: dayOffset,
         actualGB: actual,
         baselineGB: base,
-        actualPct: Number(((actual / totalCap) * 100).toFixed(1)),
-        baselinePct: Number(((base / totalCap) * 100).toFixed(1)),
+        actualPct: Number(((actual / (totalCap || 1)) * 100).toFixed(1)),
+        baselinePct: Number(((base / (totalCap || 1)) * 100).toFixed(1)),
         isForecast: false,
         milestone: pt.date === 'Today' ? 'Current Telemetry' : undefined,
       });
     });
 
     // Forecast generation from today up to projectionDays
-    const todayUsed = activeBaseline.usedGB;
-    const surgeDaily = activeBaseline.currentDailyGrowthGB;
-    const baseDaily = activeBaseline.baselineDailyGrowthGB;
+    const todayUsed = activeBaseline.usedGB || 0;
+    const surgeDaily = activeBaseline.currentDailyGrowthGB || 0;
+    const baseDaily = activeBaseline.baselineDailyGrowthGB || 0;
     const remediatedDaily = Math.min(baseDaily, 10.0); // If compressed/purged
     const immediateReclaim = activeBaseline.id === 'BASE-PROD03-DATA' ? 920 : 350; // Reclaim potential
 

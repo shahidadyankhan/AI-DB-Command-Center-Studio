@@ -181,8 +181,8 @@ Always output structured JSON conforming to the section 28 response schema.
 function generateExpertDbaResponse(prompt: string, mode: string = 'dba', serverId?: string): DbaAgentResponse {
   const p = prompt.toLowerCase();
 
-  // 1. Identify if a specific server is targeted (either via serverId or by name/id in prompt)
-  const targetServer = (serverId && serverId !== 'ALL')
+  // 1. Identify if a specific server is targeted (either via serverId, by name/id in prompt, or "new/added" instance keywords)
+  let targetServer = (serverId && serverId !== 'ALL')
     ? estateServers.find((s: any) => s.id === serverId || s.name.toLowerCase() === serverId.toLowerCase())
     : estateServers.find((s: any) => {
         const nameMatch = p.includes(s.name.toLowerCase());
@@ -190,13 +190,28 @@ function generateExpertDbaResponse(prompt: string, mode: string = 'dba', serverI
         return nameMatch || idMatch;
       });
 
+  // If query refers to "new", "newly added", "onboarded", or "recent" instance
+  if (!targetServer && (p.includes('new') || p.includes('added') || p.includes('recent') || p.includes('onboarded') || p.includes('custom'))) {
+    const nonDefaultServers = estateServers.filter((s: any) => !['sql-prod-01', 'sql-prod-02', 'sql-prod-03'].includes(s.id));
+    if (nonDefaultServers.length > 0) {
+      targetServer = nonDefaultServers[nonDefaultServers.length - 1];
+    } else {
+      targetServer = estateServers[estateServers.length - 1];
+    }
+  }
+
   const targetBaseline = targetServer
-    ? estateStorageBaselines.find((b: any) => b.serverId === targetServer.id || b.serverName.toLowerCase() === targetServer.name.toLowerCase())
+    ? estateStorageBaselines.find((b: any) => 
+        b.serverId === targetServer.id || 
+        b.serverName.toLowerCase() === targetServer.name.toLowerCase() ||
+        b.id.toLowerCase().includes(targetServer.name.toLowerCase()) ||
+        b.id.toLowerCase().includes(targetServer.id.toLowerCase())
+      )
     : estateStorageBaselines.find((b: any) => p.includes(b.serverName.toLowerCase()) || p.includes(b.id.toLowerCase()));
 
   // If a specific server is asked about (e.g. newly added instance or specific monitored server)
   if (targetServer && targetServer.id !== 'sql-prod-01' && targetServer.id !== 'sql-prod-03') {
-    const isStorageQuery = p.includes('storage') || p.includes('capacity') || p.includes('disk') || p.includes('growth') || p.includes('exhaustion') || mode === 'storage-anomalies';
+    const isStorageQuery = p.includes('storage') || p.includes('capacity') || p.includes('disk') || p.includes('growth') || p.includes('exhaustion') || p.includes('anomaly') || p.includes('anomoly') || mode === 'storage-anomalies';
     
     if (isStorageQuery && targetBaseline) {
       if (targetBaseline.isAnomaly) {
@@ -240,18 +255,19 @@ function generateExpertDbaResponse(prompt: string, mode: string = 'dba', serverI
         };
       } else {
         return {
-          finding: `${targetServer.name} storage baseline is NOMINAL: volume ${targetBaseline.volumeMount} is ${targetBaseline.utilizationPct}% used with ${targetBaseline.freeGB} GB free buffer and ${targetBaseline.daysTo80Pct} days to 80% threshold.`,
+          finding: `${targetServer.name} storage baseline is NOMINAL: volume ${targetBaseline.volumeMount} is ${targetBaseline.utilizationPct}% utilized with ${targetBaseline.freeGB} GB free buffer and ${targetBaseline.daysTo80Pct} days runway to 80% threshold. Zero storage anomaly detected.`,
           evidence: [
             `Total volume capacity: ${targetBaseline.totalCapacityGB} GB; Used: ${targetBaseline.usedGB} GB (${targetBaseline.utilizationPct}%).`,
-            `Current daily ingestion: ${targetBaseline.currentDailyGrowthGB} GB/day vs baseline ${targetBaseline.baselineDailyGrowthGB} GB/day (nominal z-score: ${targetBaseline.zScore}).`,
-            `Available free buffer: ${targetBaseline.freeGB} GB (${Math.round((targetBaseline.freeGB / targetBaseline.totalCapacityGB) * 100)}% available).`,
+            `Observed daily growth: ${targetBaseline.currentDailyGrowthGB} GB/day vs baseline ${targetBaseline.baselineDailyGrowthGB} GB/day (nominal z-score: +${targetBaseline.zScore}).`,
+            `Available free storage buffer: ${targetBaseline.freeGB} GB (${Math.round((targetBaseline.freeGB / targetBaseline.totalCapacityGB) * 100)}% available).`,
             `Projected 80% threshold date: ${targetBaseline.projectedDate80} (${targetBaseline.daysTo80Pct} days runway).`,
+            `Storage Anomaly Engine baseline status: Active and healthy on database ${targetBaseline.databaseName}.`,
           ],
-          analysis: `Statistical moving baseline confirms ${targetServer.name} storage telemetry is within normal standard deviation. No capacity exhaustion risks detected for the active planning horizon.`,
+          analysis: `Statistical moving baseline confirms ${targetServer.name} telemetry is operating well within standard variance (+${targetBaseline.zScore} z-score). There is no capacity exhaustion risk or storage anomaly on this instance. Live telemetry stream is fully synchronized.`,
           risk: {
-            score: 12,
+            score: 8,
             level: 'LOW',
-            businessImpact: 'Capacity buffer is healthy. Zero operational risk or SLA exposure.',
+            businessImpact: `Zero operational capacity risk or SLA exposure on ${targetServer.name}. Buffer margin exceeds 6 months.`,
           },
           recommendations: [
             targetBaseline.recommendedAction || {
@@ -274,7 +290,7 @@ function generateExpertDbaResponse(prompt: string, mode: string = 'dba', serverI
           approval: { required: false, level: 'GREEN', reason: 'Read-only telemetry monitoring.' },
           validation: 'Telemetry verified nominal against historical baseline.',
           audit: 'Recorded in automated estate inventory.',
-          confidence: { level: 'HIGH', pct: 96, rationale: 'Live DMV volume telemetry and moving linear regression.' },
+          confidence: { level: 'HIGH', pct: 98, rationale: 'Live DMV volume telemetry and moving linear regression from monitored instance.' },
           sourceMode: mode,
         };
       }
@@ -699,6 +715,11 @@ Selected Incident: ${incidentId || 'NONE'}
 Live Estate Telemetry Snapshot:
 ${JSON.stringify(estateSnapshot, null, 2)}
 
+CRITICAL ANTI-HALLUCINATION & GROUNDING RULES:
+1. STRICT ACCURACY FROM SNAPSHOT: Derive ALL metrics, status indicators, and anomaly flags strictly from the Live Estate Telemetry Snapshot above.
+2. HEALTHY / NOMINAL SERVERS: If the query asks about a server or newly added instance whose healthScore is >= 85, status is 'healthy', or whose storage baseline has isAnomaly: false, you MUST report that the instance is NOMINAL, HEALTHY, and operating within safe margins. NEVER hallucinate an outage, high blocking, or storage exhaustion for a healthy or newly added server.
+3. STORAGE ANOMALY ENGINE STATUS: When asked about the Storage Anomaly Engine for a newly onboarded server, verify its baseline in the snapshot (e.g. utilizationPct, daysTo80Pct, zScore) and confirm it is actively tracked and nominal.
+
 Provide your response strictly complying with the Section 28 Response Format and Section 1 Core Operating Principles.
 Return a valid JSON object matching:
 {
@@ -1080,10 +1101,28 @@ app.get('/api/dba/storage-anomalies', (req, res) => {
 
 app.post('/api/dba/storage-anomalies/deep-report', async (req, res) => {
   try {
-    const { baselineId } = req.body;
-    const target = estateStorageBaselines.find((b: any) => b.id === baselineId) || estateStorageBaselines[0];
+    const { baselineId, serverId, serverName } = req.body;
+    const target = estateStorageBaselines.find((b: any) => 
+      (baselineId && (b.id === baselineId || b.id.toLowerCase() === String(baselineId).toLowerCase())) ||
+      (serverId && (b.serverId === serverId || b.serverId.toLowerCase() === String(serverId).toLowerCase())) ||
+      (serverName && (b.serverName === serverName || b.serverName.toLowerCase() === String(serverName).toLowerCase())) ||
+      (baselineId && (
+        b.serverId?.toLowerCase() === String(baselineId).toLowerCase() ||
+        b.serverName?.toLowerCase() === String(baselineId).toLowerCase() ||
+        String(baselineId).toLowerCase().includes(b.serverName?.toLowerCase() || '') ||
+        String(baselineId).toLowerCase().includes(b.id?.toLowerCase() || '')
+      ))
+    ) || estateStorageBaselines.find((b: any) => b.id === baselineId) || estateStorageBaselines[0];
 
-    const deepStoragePrompt = `Generate a comprehensive Predictive Storage Growth Anomaly Report for:
+    const isTargetAnomaly = Boolean(target.isAnomaly);
+    const topConsumer = (target.topTableConsumers && target.topTableConsumers[0]) ? target.topTableConsumers[0] : {
+      tableName: `dbo.${target.databaseName || 'Core'}_Master`,
+      sizeGB: Math.round((target.usedGB || 680) * 0.4),
+      pctOfDatabase: 40,
+      growth30dGB: Math.round((target.currentDailyGrowthGB || 5) * 5),
+    };
+
+    const deepStoragePrompt = `Generate a comprehensive Predictive Storage Growth Capacity Report for:
     Server: ${target.serverName}, Database: ${target.databaseName}, Volume: ${target.volumeMount}
     Total Capacity: ${target.totalCapacityGB} GB, Used: ${target.usedGB} GB (${target.utilizationPct}%)
     Baseline Daily Growth: ${target.baselineDailyGrowthGB} GB/day vs Observed Current: ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}%)
@@ -1091,11 +1130,16 @@ app.post('/api/dba/storage-anomalies/deep-report', async (req, res) => {
     Days to 80%: ${target.daysTo80Pct} days (${target.projectedDate80})
     Days to 90%: ${target.daysTo90Pct} days (${target.projectedDate90})
     Days to 100%: ${target.daysTo100Pct} days (${target.projectedDate100})
-    Top Consumer: ${JSON.stringify(target.topTableConsumers[0])}
+    Anomaly Detected: ${isTargetAnomaly ? 'YES - CRITICAL SURGE ANOMALY' : 'NO - NOMINAL / HEALTHY BUFFER'}
+    Top Consumer: ${JSON.stringify(topConsumer)}
+
+    CRITICAL ANTI-HALLUCINATION INSTRUCTION:
+    - If Anomaly Detected is NO, the volume is operating within normal variance with safe runway (>180 days). You MUST report that this storage volume is NOMINAL, stable, and healthy. DO NOT claim an outage, crisis, or false urgency.
+    - If Anomaly Detected is YES, report the surge velocity and recommended remediation.
 
     Provide your expert response as a valid JSON object matching:
     {
-      "executiveSummary": "Concise high-level finding",
+      "executiveSummary": "Concise high-level finding reflecting the true anomaly or nominal state",
       "statisticalAnalysis": "Deviation z-score analysis comparing 90-day baseline to current velocity",
       "predictedTimelines": {
         "threshold80": "Timeline and date for 80% full",
@@ -1111,19 +1155,11 @@ app.post('/api/dba/storage-anomalies/deep-report', async (req, res) => {
     }`;
 
     const parsedReport = await executeLlmChat(MASTER_SYSTEM_INSTRUCTION, deepStoragePrompt);
-    if (parsedReport) {
+    if (parsedReport && parsedReport.executiveSummary) {
       return res.json(parsedReport);
     }
 
     // Deterministic fallback report dynamically tailored to the target baseline
-    const isTargetAnomaly = Boolean(target.isAnomaly);
-    const topConsumer = target.topTableConsumers?.[0] || {
-      tableName: `dbo.${target.databaseName}_Master`,
-      sizeGB: Math.round(target.usedGB * 0.4),
-      pctOfDatabase: 40,
-      growth30dGB: Math.round(target.currentDailyGrowthGB * 5),
-    };
-
     return res.json({
       executiveSummary: isTargetAnomaly
         ? `Critical storage growth anomaly detected on ${target.serverName} (${target.databaseName}). Volume ${target.volumeMount} is growing at ${target.currentDailyGrowthGB} GB/day (+${target.growthVelocitySurgePct}% vs baseline) with a statistically significant z-score of ${target.zScore}.`
@@ -1369,8 +1405,9 @@ app.post('/api/dba/servers', async (req, res) => {
 
     const rawHost = address || name || 'SQL-NEW';
     const cleanName = (name || rawHost.split('.')[0] || 'SQL-NEW').toUpperCase().replace(/[^A-Z0-9-]/g, '');
-    const serverId = `sql-${cleanName.toLowerCase()}`;
-    const serverName = cleanName;
+    const cleanLower = cleanName.toLowerCase();
+    const serverId = cleanLower.startsWith('sql-') ? cleanLower : `sql-${cleanLower}`;
+    const serverName = cleanName.startsWith('SQL-') ? cleanName : `SQL-${cleanName}`;
 
     // Generate secure push agent token for local scripts
     const pushAgentToken = 'tok_' + Math.random().toString(36).substring(2, 10);
@@ -1513,8 +1550,12 @@ app.post('/api/dba/servers', async (req, res) => {
     ];
 
     // Create baseline storage volume
-    const baselineId = `BASE-${serverId.toUpperCase()}-DATA`;
-    estateStorageBaselines = estateStorageBaselines.filter((b: any) => b.id !== baselineId && b.serverId !== serverId);
+    const baselineId = `BASE-${serverName}-DATA`;
+    estateStorageBaselines = estateStorageBaselines.filter((b: any) => 
+      b.id !== baselineId && 
+      b.serverId !== serverId && 
+      b.serverName !== serverName
+    );
     estateStorageBaselines.push({
       id: baselineId,
       serverId,

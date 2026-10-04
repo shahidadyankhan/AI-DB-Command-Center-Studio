@@ -35,7 +35,11 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
   const [aiReport, setAiReport] = useState<any>(null);
   const [copiedScript, setCopiedScript] = useState(false);
 
-  const currentBaseline = baselines.find(b => b.id === selectedBaselineId) || baselines[0];
+  // Fallback cleanly to matching id, or matching serverId/serverName, or latest/first baseline
+  const currentBaseline = baselines.find(b => b.id === selectedBaselineId) 
+    || baselines.find(b => b.serverId === selectedBaselineId)
+    || baselines.find(b => b.serverName?.toLowerCase() === selectedBaselineId?.toLowerCase())
+    || baselines[0];
 
   const handleGenerateAiReport = async () => {
     if (!currentBaseline) return;
@@ -44,7 +48,11 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
       const res = await fetch('/api/dba/storage-anomalies/deep-report', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baselineId: currentBaseline.id }),
+        body: JSON.stringify({ 
+          baselineId: currentBaseline.id,
+          serverId: currentBaseline.serverId,
+          serverName: currentBaseline.serverName 
+        }),
       });
       const data = await res.json();
       setAiReport(data);
@@ -134,32 +142,42 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
 
       {/* Target Volume Selector Tabs */}
       <div className="flex items-center space-x-2 overflow-x-auto pb-1 no-scrollbar">
-        {baselines.map((b) => (
-          <button
-            key={b.id}
-            onClick={() => {
-              setSelectedBaselineId(b.id);
-              setAiReport(null);
-            }}
-            className={`px-4 py-2.5 rounded-xl border text-xs font-mono text-left transition cursor-pointer flex items-center space-x-3 shrink-0 ${
-              selectedBaselineId === b.id
-                ? 'bg-amber-950/40 border-amber-500 text-amber-200 shadow-md shadow-amber-950'
-                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <div>
-              <div className="font-bold flex items-center gap-1.5">
-                <span>{b.serverName} ({b.databaseName})</span>
-                {b.isAnomaly && (
-                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-                )}
+        {baselines.map((b) => {
+          const isSelected = selectedBaselineId === b.id || currentBaseline?.id === b.id;
+          const isLiveInstance = b.id.includes('SQL-') && !['BASE-PROD03-DATA', 'BASE-PROD01-DATA', 'BASE-PROD02-DATA'].includes(b.id);
+
+          return (
+            <button
+              key={b.id}
+              onClick={() => {
+                setSelectedBaselineId(b.id);
+                setAiReport(null);
+              }}
+              className={`px-4 py-2.5 rounded-xl border text-xs font-mono text-left transition cursor-pointer flex items-center space-x-3 shrink-0 ${
+                isSelected
+                  ? 'bg-amber-950/40 border-amber-500 text-amber-200 shadow-md shadow-amber-950'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <div>
+                <div className="font-bold flex items-center gap-1.5">
+                  <span>{b.serverName} ({b.databaseName})</span>
+                  {b.isAnomaly && (
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+                  )}
+                  {isLiveInstance && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      LIVE
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  {b.volumeMount} • {b.utilizationPct}% Used ({b.daysTo80Pct}d to 80%)
+                </div>
               </div>
-              <div className="text-[10px] text-slate-500">
-                {b.volumeMount} • {b.utilizationPct}% Used ({b.daysTo80Pct}d to 80%)
-              </div>
-            </div>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
 
       {/* Main Grid: Baseline Deviation & Threshold Countdowns */}
@@ -281,7 +299,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
               
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 overflow-x-auto">
                 <div className="flex items-center justify-between min-w-[500px] gap-2 text-center text-[10px] font-mono">
-                  {currentBaseline.historicalDataPoints.map((pt, idx) => (
+                  {(currentBaseline.historicalDataPoints || []).map((pt, idx) => (
                     <div key={idx} className="flex-1 space-y-1">
                       <div className="text-slate-500 truncate">{pt.date}</div>
                       <div className={`p-1.5 rounded ${
@@ -312,7 +330,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
                   Granular space analysis from sys.dm_db_partition_stats & sys.allocation_units
                 </p>
               </div>
-              <span className="text-xs font-mono text-cyan-400">{currentBaseline.topTableConsumers.length} Monitored</span>
+              <span className="text-xs font-mono text-cyan-400">{(currentBaseline.topTableConsumers || []).length} Monitored</span>
             </div>
 
             <div className="space-y-2 text-xs">

@@ -247,7 +247,8 @@ GO
 PRINT 'AI DBA Monitoring account configured successfully.';
 `;
 
-  const cleanServerId = `sql-${serverAddress.split('.')[0].toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+  const rawHostId = serverAddress.split('.')[0].toLowerCase().replace(/[^a-z0-9-]/g, '');
+  const cleanServerId = rawHostId.startsWith('sql-') ? rawHostId : `sql-${rawHostId}`;
   const originUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
   const pushEndpoint = `${originUrl}/api/dba/telemetry/push`;
 
