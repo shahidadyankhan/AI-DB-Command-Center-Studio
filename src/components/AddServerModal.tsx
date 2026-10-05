@@ -38,6 +38,7 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
 
   // Form Fields: Step 1 (Connection)
   const [serverAddress, setServerAddress] = useState('sql-prod-04.corp.internal');
+  const [serverDisplayName, setServerDisplayName] = useState('');
   const [instanceName, setInstanceName] = useState('MSSQLSERVER');
   const [port, setPort] = useState('1433');
   const [role, setRole] = useState('Payment Gateway & Settlement Hub');
@@ -69,8 +70,46 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
     discoveredOs?: string;
     discoveredCores?: number;
     discoveredMemoryGB?: number;
+    memoryUsedGB?: number;
+    ple?: number;
+    cpuUsagePct?: number;
+    discoveredServerName?: string;
+    machineName?: string;
+    avgReadLatencyMs?: number;
+    avgWriteLatencyMs?: number;
     permissionsChecked?: Array<{ name: string; granted: boolean }>;
     discoveredDatabases?: string[];
+    databaseDetails?: Array<{
+      name: string;
+      sizeGB: number;
+      growthRate30DaysPct: number;
+      recoveryModel: string;
+      state: string;
+      dataSizeGB: number;
+      logSizeGB: number;
+    }>;
+    volumeStats?: Array<{
+      volumeMount: string;
+      totalGB: number;
+      freeGB: number;
+      usedGB: number;
+      diskFreePct: number;
+    }>;
+    backupInfo?: {
+      hasBackups: boolean;
+      lastFullBackupHoursAgo: number | null;
+      lastLogBackupMinutesAgo: number | null;
+      backupStatus: string;
+    };
+    topTables?: Array<{
+      tableName: string;
+      schema: string;
+      sizeGB: number;
+      rowCount: number;
+    }>;
+    waitStats?: any[];
+    activeSessions?: number;
+    blockedCount?: number;
     message?: string;
     errorCode?: string;
     diagnosticAdvice?: string;
@@ -160,6 +199,16 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
 
       const data = await res.json();
       setTestResult(data);
+      if (data && data.success) {
+        if (data.discoveredServerName) {
+          setServerDisplayName(data.discoveredServerName);
+        } else if (data.machineName) {
+          setServerDisplayName(data.machineName);
+        }
+        if (data.discoveredDatabases && Array.isArray(data.discoveredDatabases) && data.discoveredDatabases.length > 0) {
+          setDatabasesInput(data.discoveredDatabases.join(', '));
+        }
+      }
     } catch (err: any) {
       setTestResult({
         success: false,
@@ -178,8 +227,11 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
     setIsSubmitting(true);
     setSubmissionError(null);
     try {
+      const defaultHostName = serverAddress.split('.')[0] || 'SQL-NEW';
+      const resolvedName = (serverDisplayName.trim() || testResult?.discoveredServerName || testResult?.machineName || defaultHostName).toUpperCase();
+
       const serverPayload = {
-        name: serverAddress.split('.')[0].toUpperCase(),
+        name: resolvedName,
         address: serverAddress,
         instanceName,
         port: Number(port) || 1433,
@@ -195,15 +247,7 @@ export const AddServerModal: React.FC<AddServerModalProps> = ({
         rpoMinutes,
         rtoMinutes,
         telemetryMode,
-        discoveredSpecs: testResult || {
-          isRealServer: false,
-          discoveredOs: 'Windows Server 2022 Datacenter',
-          discoveredVersion: 'Microsoft SQL Server 2022 (RTM-CU14)',
-          discoveredEdition: 'Enterprise Edition (64-bit)',
-          discoveredCores: 32,
-          discoveredMemoryGB: 256,
-          latencyMs: 2,
-        },
+        discoveredSpecs: testResult || null,
       };
 
       const res = await fetch('/api/dba/servers', {
@@ -427,11 +471,37 @@ python -c "import urllib.request; exec(urllib.request.urlopen('${originUrl}/api/
                   <input
                     type="text"
                     value={serverAddress}
-                    onChange={(e) => setServerAddress(e.target.value)}
+                    onChange={(e) => {
+                      setServerAddress(e.target.value);
+                      if (!serverDisplayName) {
+                        const token = e.target.value.split('.')[0];
+                        if (token && !/^\d+$/.test(token)) {
+                          setServerDisplayName(token.toUpperCase());
+                        }
+                      }
+                    }}
                     placeholder="e.g. 192.168.1.100, localhost, or sql-prod-04.corp.internal"
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
                   />
                   <p className="text-[10px] text-slate-500">Fully Qualified Domain Name (FQDN) or IP</p>
+                </div>
+
+                {/* Display Name / Server Tag */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-slate-300 font-medium">Server Name / Display Alias</label>
+                    {testResult?.discoveredServerName && (
+                      <span className="text-[10px] text-emerald-400 font-mono">Discovered: {testResult.discoveredServerName}</span>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={serverDisplayName}
+                    onChange={(e) => setServerDisplayName(e.target.value)}
+                    placeholder={testResult?.discoveredServerName || serverAddress.split('.')[0].toUpperCase() || "e.g. SQL-PROD-01 or ORION-DB"}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-cyan-300 focus:outline-none focus:border-cyan-500"
+                  />
+                  <p className="text-[10px] text-slate-500">Identifier shown across Command Center and AI DBA diagnostics</p>
                 </div>
 
                 {/* Instance Name */}
@@ -588,7 +658,19 @@ python -c "import urllib.request; exec(urllib.request.urlopen('${originUrl}/api/
               
               {/* Databases Input */}
               <div className="space-y-1.5">
-                <label className="text-slate-300 font-medium">User Databases to Monitor (comma separated)</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-slate-300 font-medium">User Databases to Monitor (comma separated)</label>
+                  {testResult?.discoveredDatabases && testResult.discoveredDatabases.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setDatabasesInput(testResult.discoveredDatabases!.join(', '))}
+                      className="text-[10px] text-cyan-400 hover:text-cyan-300 font-mono flex items-center gap-1 cursor-pointer"
+                    >
+                      <Check className="w-3 h-3 text-emerald-400" />
+                      <span>Use All Discovered ({testResult.discoveredDatabases.length} DBs)</span>
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={databasesInput}

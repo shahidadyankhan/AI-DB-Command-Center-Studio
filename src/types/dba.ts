@@ -25,8 +25,8 @@ export interface ServerInstance {
   blockedSessionsCount: number;
   deadlocksLast24h: number;
   alwaysOnStatus: 'healthy' | 'synchronizing' | 'degraded' | 'not-applicable';
-  lastFullBackupHoursAgo: number;
-  lastLogBackupMinutesAgo: number;
+  lastFullBackupHoursAgo: number | null;
+  lastLogBackupMinutesAgo: number | null;
   databases: DatabaseInfo[];
   recentChanges: ChangeCorrelationEvent[];
   // Real-time telemetry indicators
@@ -46,6 +46,8 @@ export interface DatabaseInfo {
   application: string;
   criticality: 'Tier 1 - Mission Critical' | 'Tier 2 - Business Essential' | 'Tier 3 - Standard';
   sizeGB: number;
+  dataSizeGB?: number;
+  logSizeGB?: number;
   growthRate30DaysPct: number;
   recoveryModel: 'FULL' | 'SIMPLE' | 'BULK_LOGGED';
   rpoMinutes: number;

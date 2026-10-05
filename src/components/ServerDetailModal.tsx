@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Server, 
   X, 
@@ -14,7 +14,8 @@ import {
   Terminal,
   Copy,
   Check,
-  Zap
+  Zap,
+  RefreshCw
 } from 'lucide-react';
 import { ServerInstance } from '../types/dba';
 
@@ -22,14 +23,41 @@ interface ServerDetailModalProps {
   server: ServerInstance | null;
   onClose: () => void;
   onAskAiAboutServer: (serverName: string) => void;
+  onServerUpdated?: (updatedServer: ServerInstance) => void;
 }
 
 export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
   server,
   onClose,
-  onAskAiAboutServer
+  onAskAiAboutServer,
+  onServerUpdated
 }) => {
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+
   if (!server) return null;
+
+  const handleRefreshLiveTelemetry = async () => {
+    setIsRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      const res = await fetch(`/api/dba/servers/${server.id}/refresh`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.server) {
+        onServerUpdated?.(data.server);
+        setRefreshMessage(data.message || 'Live DMV telemetry refreshed from SQL Server!');
+        setTimeout(() => setRefreshMessage(null), 3500);
+      }
+    } catch (e: any) {
+      setRefreshMessage('Telemetry query failed: ' + e.message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const displayName = server.name.length <= 2 && server.connectionHost 
+    ? `${server.name} (${server.connectionHost})`
+    : server.name;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">
@@ -44,7 +72,7 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
             <div>
               <div className="flex items-center space-x-2">
                 <h3 className="text-xl font-bold text-white font-mono">
-                  {server.name}
+                  {displayName}
                 </h3>
                 <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
                   server.status === 'healthy' ? 'bg-emerald-500/20 text-emerald-400' :
@@ -77,6 +105,16 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
         {/* Content */}
         <div className="p-6 overflow-y-auto space-y-6 text-xs">
           
+          {refreshMessage && (
+            <div className="bg-emerald-950/60 border border-emerald-700/80 p-2.5 rounded-xl text-emerald-200 text-xs flex items-center justify-between animate-in fade-in">
+              <span className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span>{refreshMessage}</span>
+              </span>
+              <span className="text-[10px] font-mono text-emerald-400">Just Now</span>
+            </div>
+          )}
+
           {/* Real-Time Telemetry Connection Strip */}
           <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 font-mono text-[11px]">
             <div className="flex items-center space-x-2 text-slate-300">
@@ -94,15 +132,21 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
             <div className="flex items-center space-x-3 text-slate-400">
               <span>Ping Latency: <strong className="text-cyan-300">{server.liveLatencyMs || 2}ms</strong></span>
               <span>•</span>
-              <span className="text-emerald-400 flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                Live Heartbeat Active
-              </span>
+              <button
+                type="button"
+                onClick={handleRefreshLiveTelemetry}
+                disabled={isRefreshing}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 hover:text-white flex items-center gap-1.5 border border-slate-700 transition cursor-pointer"
+                title="Query live DMV metrics directly from SQL Server"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin text-cyan-400' : 'text-emerald-400'}`} />
+                <span>{isRefreshing ? 'Querying DMVs...' : 'Live DMV Refresh'}</span>
+              </button>
             </div>
           </div>
 
           {/* Quick Hardware Spec Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] font-mono">CPU Schedulers</span>
               <span className="text-sm font-bold text-slate-200">{server.cpuCores} Cores ({server.cpuUsagePct}% used)</span>
@@ -116,8 +160,16 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
               <span className="text-sm font-bold text-slate-200">Read: {server.avgReadLatencyMs}ms / Write: {server.avgWriteLatencyMs}ms</span>
             </div>
             <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
+              <span className="text-slate-400 block text-[10px] font-mono">Volume Free Space</span>
+              <span className="text-sm font-bold text-cyan-300">{server.diskFreePct}% Free ({server.daysTo80PctDisk}d runway)</span>
+            </div>
+            <div className="bg-slate-950 p-3 rounded-lg border border-slate-800">
               <span className="text-slate-400 block text-[10px] font-mono">Backup Recovery Status</span>
-              <span className="text-sm font-bold text-emerald-400">Full: {server.lastFullBackupHoursAgo}h ago / Log: {server.lastLogBackupMinutesAgo}m</span>
+              <span className={`text-sm font-bold ${server.lastFullBackupHoursAgo != null ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {server.lastFullBackupHoursAgo != null 
+                  ? `Full: ${server.lastFullBackupHoursAgo}h / Log: ${server.lastLogBackupMinutesAgo ?? 0}m`
+                  : 'None in msdb (Standalone)'}
+              </span>
             </div>
           </div>
 
@@ -146,8 +198,14 @@ export const ServerDetailModal: React.FC<ServerDetailModalProps> = ({
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-[11px] font-mono text-slate-300">
                     <div>
-                      <span className="text-slate-500 block text-[10px]">Size / Growth</span>
-                      <span>{db.sizeGB} GB (+{db.growthRate30DaysPct}%/mo)</span>
+                      <span className="text-slate-500 block text-[10px]">Total Size / Growth</span>
+                      <span className="font-bold text-white">{db.sizeGB} GB</span>
+                      <span className="text-slate-400 text-[10px] ml-1">(+{db.growthRate30DaysPct}%/mo)</span>
+                      {db.dataSizeGB != null && (
+                        <div className="text-[10px] text-cyan-300 font-mono mt-0.5">
+                          Data: {db.dataSizeGB} GB • Log: {db.logSizeGB ?? 0.5} GB
+                        </div>
+                      )}
                     </div>
                     <div>
                       <span className="text-slate-500 block text-[10px]">Recovery Model</span>

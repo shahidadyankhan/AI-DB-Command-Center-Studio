@@ -92,7 +92,14 @@ export default function App() {
         const res = await fetch('/api/dba/estate');
         if (res.ok && isMounted) {
           const data = await res.json();
-          if (data.servers) setServers(data.servers);
+          if (data.servers) {
+            setServers(data.servers);
+            setSelectedServerForDetail(prev => {
+              if (!prev) return null;
+              const refreshed = data.servers.find((s: any) => s.id === prev.id);
+              return refreshed || prev;
+            });
+          }
           if (data.incidents) setIncidents(data.incidents);
           if (data.recommendations) setRecommendations(data.recommendations);
           if (data.auditLogs) setAuditLogs(data.auditLogs);
@@ -331,6 +338,10 @@ export default function App() {
       <ServerDetailModal
         server={selectedServerForDetail}
         onClose={() => setSelectedServerForDetail(null)}
+        onServerUpdated={(updated) => {
+          setServers(prev => prev.map(s => s.id === updated.id ? updated : s));
+          setSelectedServerForDetail(updated);
+        }}
         onAskAiAboutServer={(serverName) => {
           handleOpenAiConsoleWithPrompt(`Why is ${serverName} experiencing performance or capacity risk? Provide evidence and recommendations.`);
         }}
