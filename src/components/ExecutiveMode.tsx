@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   ShieldCheck, 
   AlertTriangle, 
@@ -11,7 +11,11 @@ import {
   CheckCircle,
   FileText,
   DollarSign,
-  Plus
+  Plus,
+  Trash2,
+  AlertCircle,
+  X,
+  RefreshCw
 } from 'lucide-react';
 import { ServerInstance, Incident, RecommendationItem } from '../types/dba';
 
@@ -23,6 +27,8 @@ interface ExecutiveModeProps {
   onSelectIncident: (incident: Incident) => void;
   onRequestApproval: (rec: RecommendationItem) => void;
   onOpenAddServer?: () => void;
+  onRemoveServer?: (serverId: string) => Promise<boolean>;
+  onClearMockServers?: () => Promise<boolean>;
 }
 
 export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
@@ -33,7 +39,44 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
   onSelectIncident,
   onRequestApproval,
   onOpenAddServer,
+  onRemoveServer,
+  onClearMockServers,
 }) => {
+  const [serverToDelete, setServerToDelete] = useState<ServerInstance | null>(null);
+  const [showClearMockConfirm, setShowClearMockConfirm] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  const mockServers = servers.filter(
+    (s) => s.telemetryMode === 'simulated' || ['sql-prod-01', 'sql-prod-02', 'sql-prod-03'].includes(s.id)
+  );
+
+  const handleConfirmDeleteServer = async () => {
+    if (!serverToDelete || !onRemoveServer) return;
+    setIsBusy(true);
+    const sName = serverToDelete.name;
+    const ok = await onRemoveServer(serverToDelete.id);
+    setIsBusy(false);
+    setServerToDelete(null);
+    if (ok) {
+      setActionFeedback(`Server ${sName} successfully decommissioned and removed from inventory.`);
+      setTimeout(() => setActionFeedback(null), 4000);
+    }
+  };
+
+  const handleConfirmClearMock = async () => {
+    if (!onClearMockServers) return;
+    setIsBusy(true);
+    const count = mockServers.length;
+    const ok = await onClearMockServers();
+    setIsBusy(false);
+    setShowClearMockConfirm(false);
+    if (ok) {
+      setActionFeedback(`Purged ${count} simulated/mock servers. Monitored estate is now 100% real live instances.`);
+      setTimeout(() => setActionFeedback(null), 4000);
+    }
+  };
+
   const avgHealth = Math.round(
     servers.reduce((acc, s) => acc + s.healthScore, 0) / (servers.length || 1)
   );
@@ -139,13 +182,23 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
         
         {/* Left 2 Cols: Monitored Estate Instances */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <h3 className="text-base font-bold text-slate-200 flex items-center gap-2">
               <Server className="w-4 h-4 text-cyan-400" />
               <span>Database Estate Inventory & Real-Time Status</span>
             </h3>
             <div className="flex items-center space-x-2">
-              <span className="text-xs text-slate-400 hidden sm:inline">Click server to inspect</span>
+              {mockServers.length > 0 && onClearMockServers && (
+                <button
+                  type="button"
+                  onClick={() => setShowClearMockConfirm(true)}
+                  className="flex items-center space-x-1 px-2.5 py-1.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-rose-300 hover:text-rose-100 text-xs font-mono transition cursor-pointer"
+                  title="Decommission all mock/simulated servers"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Purge Mock ({mockServers.length})</span>
+                </button>
+              )}
               {onOpenAddServer && (
                 <button
                   onClick={onOpenAddServer}
@@ -157,6 +210,18 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
               )}
             </div>
           </div>
+
+          {actionFeedback && (
+            <div className="p-3 bg-emerald-950/60 border border-emerald-700/80 rounded-xl text-emerald-200 text-xs flex items-center justify-between animate-in fade-in">
+              <span className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                <span>{actionFeedback}</span>
+              </span>
+              <button onClick={() => setActionFeedback(null)} className="text-emerald-400 hover:text-emerald-200 cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {servers.map((s) => (
@@ -190,12 +255,27 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
                     </div>
                   </div>
 
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-400 font-mono">Health</div>
-                    <div className={`text-lg font-bold font-mono ${
-                      s.healthScore >= 90 ? 'text-emerald-400' : s.healthScore >= 75 ? 'text-amber-400' : 'text-rose-400'
-                    }`}>
-                      {s.healthScore}%
+                  <div className="text-right flex items-start gap-2">
+                    {onRemoveServer && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setServerToDelete(s);
+                        }}
+                        className="p-1 rounded text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+                        title={`Decommission and remove ${s.name}`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <div>
+                      <div className="text-[10px] text-slate-400 font-mono">Health</div>
+                      <div className={`text-lg font-bold font-mono ${
+                        s.healthScore >= 90 ? 'text-emerald-400' : s.healthScore >= 75 ? 'text-amber-400' : 'text-rose-400'
+                      }`}>
+                        {s.healthScore}%
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -337,6 +417,98 @@ export const ExecutiveMode: React.FC<ExecutiveModeProps> = ({
         </div>
 
       </div>
+
+      {/* Modal: Confirm Decommission Individual Server */}
+      {serverToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-3 text-rose-400">
+              <div className="p-2 rounded-xl bg-rose-500/20 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-white text-base">Decommission SQL Server Asset</h4>
+                <p className="text-xs text-slate-400">Remove instance from real-time monitoring</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Are you sure you want to decommission and remove <strong className="text-white font-mono">{serverToDelete.name}</strong> ({serverToDelete.id}) from the active inventory?
+            </p>
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1 font-mono">
+              <div>• Live telemetry polling will be terminated immediately.</div>
+              <div>• Storage baseline forecasts and wait stats cache will be cleared.</div>
+              <div>• Audit log entry will record DECOMMISSION_SQL_SERVER_ASSET.</div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setServerToDelete(null)}
+                disabled={isBusy}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteServer}
+                disabled={isBusy}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md shadow-rose-600/30 flex items-center space-x-1.5 transition cursor-pointer"
+              >
+                {isBusy && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Decommission & Remove</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirm Purge All Mock Servers */}
+      {showClearMockConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-3 text-amber-400">
+              <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-500/30">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-white text-base">Purge All Mock / Simulated Servers</h4>
+                <p className="text-xs text-slate-400">Retain only real connected database instances</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Are you sure you want to purge all <strong className="text-white">{mockServers.length} simulated/mock servers</strong> (such as <code className="text-cyan-300 font-mono">SQL-PROD-01, SQL-PROD-02, SQL-PROD-03</code>)?
+            </p>
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1 font-mono">
+              <div>• All {mockServers.length} simulated lab servers will be cleared.</div>
+              <div>• Any real live TDS or Push-Agent instances you added will remain completely intact.</div>
+              <div>• Your estate overview will reflect 100% genuine database metrics.</div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowClearMockConfirm(false)}
+                disabled={isBusy}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClearMock}
+                disabled={isBusy}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md shadow-rose-600/30 flex items-center space-x-1.5 transition cursor-pointer"
+              >
+                {isBusy && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Purge {mockServers.length} Mock Servers</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

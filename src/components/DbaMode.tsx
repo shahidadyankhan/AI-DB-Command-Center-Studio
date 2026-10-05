@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Terminal, 
   AlertTriangle, 
@@ -14,7 +14,10 @@ import {
   ArrowRight,
   ShieldAlert,
   GitCommit,
-  Plus
+  Plus,
+  Trash2,
+  X,
+  RefreshCw
 } from 'lucide-react';
 import { 
   ServerInstance, 
@@ -31,6 +34,8 @@ interface DbaModeProps {
   queryRegressions: QueryStoreRegression[];
   onRequestApproval: (rec: RecommendationItem) => void;
   onOpenAddServer?: () => void;
+  onRemoveServer?: (serverId: string) => Promise<boolean>;
+  onClearMockServers?: () => Promise<boolean>;
 }
 
 export const DbaMode: React.FC<DbaModeProps> = ({
@@ -39,10 +44,22 @@ export const DbaMode: React.FC<DbaModeProps> = ({
   blockingChain,
   queryRegressions,
   onRequestApproval,
-  onOpenAddServer
+  onOpenAddServer,
+  onRemoveServer,
+  onClearMockServers
 }) => {
-  const [selectedServerId, setSelectedServerId] = useState<string>('sql-prod-01');
+  const [selectedServerId, setSelectedServerId] = useState<string>(() => servers[0]?.id || 'sql-prod-01');
   const [copiedQueryId, setCopiedQueryId] = useState<number | null>(null);
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  // Sync selectedServerId if current selection was removed
+  useEffect(() => {
+    if (!servers.some(s => s.id === selectedServerId) && servers.length > 0) {
+      setSelectedServerId(servers[0].id);
+    }
+  }, [servers, selectedServerId]);
 
   const currentServer = servers.find(s => s.id === selectedServerId) || servers[0];
   const currentWaits = waitStats[selectedServerId] || waitStats['sql-prod-01'] || [];
@@ -50,10 +67,27 @@ export const DbaMode: React.FC<DbaModeProps> = ({
   const rootBlocker = blockingChain.find(b => b.isRootBlocker);
   const dependentBlocked = blockingChain.filter(b => !b.isRootBlocker);
 
+  const mockServers = servers.filter(
+    (s) => s.telemetryMode === 'simulated' || ['sql-prod-01', 'sql-prod-02', 'sql-prod-03'].includes(s.id)
+  );
+
   const handleCopy = (text: string, id: number) => {
     navigator.clipboard.writeText(text);
     setCopiedQueryId(id);
     setTimeout(() => setCopiedQueryId(null), 2000);
+  };
+
+  const handleDecommissionSelected = async () => {
+    if (!currentServer || !onRemoveServer) return;
+    setIsDeleting(true);
+    const sName = currentServer.name;
+    const ok = await onRemoveServer(currentServer.id);
+    setIsDeleting(false);
+    setIsConfirmingDelete(false);
+    if (ok) {
+      setActionFeedback(`Server ${sName} decommissioned.`);
+      setTimeout(() => setActionFeedback(null), 3000);
+    }
   };
 
   return (
@@ -103,8 +137,70 @@ export const DbaMode: React.FC<DbaModeProps> = ({
               <span>Add</span>
             </button>
           )}
+
+          {onRemoveServer && currentServer && (
+            <button
+              type="button"
+              onClick={() => setIsConfirmingDelete(true)}
+              className="px-2.5 py-1.5 rounded-md text-xs font-mono text-rose-400 hover:text-rose-200 hover:bg-rose-950/40 border border-rose-900/60 transition flex items-center space-x-1 cursor-pointer"
+              title={`Decommission and remove ${currentServer.name}`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Remove</span>
+            </button>
+          )}
         </div>
       </div>
+
+      {actionFeedback && (
+        <div className="p-3 bg-emerald-950/60 border border-emerald-700/80 rounded-xl text-emerald-200 text-xs flex items-center justify-between animate-in fade-in">
+          <span>{actionFeedback}</span>
+          <button onClick={() => setActionFeedback(null)} className="text-emerald-400 hover:text-emerald-200">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Confirmation Modal for Decommissioning in DBA Mode */}
+      {isConfirmingDelete && currentServer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-5 space-y-4 shadow-2xl">
+            <div className="flex items-center space-x-3 text-rose-400">
+              <div className="p-2 rounded-xl bg-rose-500/20 border border-rose-500/30">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-white text-base">Decommission SQL Server</h4>
+                <p className="text-xs text-slate-400">Remove instance from real-time monitoring</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300">
+              Are you sure you want to decommission and remove <strong className="text-white font-mono">{currentServer.name}</strong> ({currentServer.id})?
+            </p>
+
+            <div className="flex items-center justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsConfirmingDelete(false)}
+                disabled={isDeleting}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDecommissionSelected}
+                disabled={isDeleting}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md shadow-rose-600/30 flex items-center space-x-1.5 transition cursor-pointer"
+              >
+                {isDeleting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>Decommission & Remove</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* BLOCKING CHAIN TREE (Section 6 & 10) */}
       {blockingChain.length > 0 && selectedServerId === 'sql-prod-01' ? (

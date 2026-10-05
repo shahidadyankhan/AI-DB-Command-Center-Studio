@@ -34,7 +34,20 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// Enable robust CORS for remote agent telemetry streaming and remote administration
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Agent-Token');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.text({ type: ['text/*', 'application/javascript'], limit: '10mb' }));
 
 // Initialize GoogleGenAI SDK as per gemini-api skill instructions
 const apiKey = process.env.GEMINI_API_KEY;
@@ -154,6 +167,107 @@ let estateBlockingChain = JSON.parse(JSON.stringify(MOCK_BLOCKING_CHAIN));
 let estateStorageBaselines = JSON.parse(JSON.stringify(MOCK_STORAGE_BASELINES));
 let estateStorageAlerts = JSON.parse(JSON.stringify(MOCK_STORAGE_ALERTS));
 let estateQueryRegressions = JSON.parse(JSON.stringify(MOCK_DETAILED_QUERY_REGRESSIONS));
+
+/**
+ * Intelligent Server Identity Matcher
+ * Matches servers by id, name, hostname, with/without 'sql-' prefix, case-insensitive.
+ */
+function matchServer(s: any, queryId: string, secondaryName?: string): boolean {
+  if (!queryId) return false;
+  const target = String(queryId).toLowerCase().trim();
+  const sId = (s.id || '').toLowerCase().trim();
+  const sName = (s.name || '').toLowerCase().trim();
+  const sHost = (s.connectionHost || '').toLowerCase().trim();
+  const targetSec = secondaryName ? String(secondaryName).toLowerCase().trim() : '';
+
+  // Exact matching
+  if (sId === target || sName === target || sHost === target) return true;
+  if (targetSec && (sId === targetSec || sName === targetSec || sHost === targetSec)) return true;
+
+  // Normalized matching (strip 'sql-' prefix and non-alphanumeric characters)
+  const normTarget = target.replace(/^sql[-_]/, '').replace(/[^a-z0-9]/g, '');
+  const normId = sId.replace(/^sql[-_]/, '').replace(/[^a-z0-9]/g, '');
+  const normName = sName.replace(/^sql[-_]/, '').replace(/[^a-z0-9]/g, '');
+  const normHost = sHost.replace(/^sql[-_]/, '').replace(/[^a-z0-9]/g, '');
+
+  if (normTarget && (normId === normTarget || normName === normTarget || normHost === normTarget)) return true;
+  if (targetSec) {
+    const normSec = targetSec.replace(/^sql[-_]/, '').replace(/[^a-z0-9]/g, '');
+    if (normSec && (normId === normSec || normName === normSec || normHost === normSec)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Decommission and remove a server asset from monitored inventory
+ */
+function removeServerById(targetId: string) {
+  const existing = estateServers.find((s: any) => matchServer(s, targetId));
+  if (!existing) {
+    return null;
+  }
+
+  const removedId = existing.id;
+  const removedName = existing.name;
+
+  // 1. Remove from monitored server estate
+  estateServers = estateServers.filter((s: any) => s.id !== removedId && s.name !== removedName);
+
+  // 2. Clean live configuration and sockets
+  liveServerConfigs.delete(removedId);
+  liveServerConfigs.delete(removedName);
+
+  // 3. Clean wait stats
+  delete estateWaitStats[removedId];
+  delete estateWaitStats[removedName];
+
+  // 4. Clean storage baselines
+  estateStorageBaselines = estateStorageBaselines.filter((b: any) => b.serverId !== removedId && b.serverName !== removedName);
+
+  // 5. Clean associated incidents and recommendations
+  estateIncidents = estateIncidents.filter((inc: any) => inc.server !== removedName && inc.server !== removedId);
+  estateRecommendations = estateRecommendations.filter((rec: any) => rec.targetServer !== removedName && rec.targetServer !== removedId);
+
+  // 6. Record audit log entry
+  const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19) + ' UTC';
+  estateAuditLogs.unshift({
+    id: `AUD-${Math.floor(1000 + Math.random() * 9000)}`,
+    timestamp,
+    requester: 'DBA Admin [Remote / Console]',
+    agent: 'AI DBA Command Center v1.0',
+    server: removedName,
+    database: 'master',
+    action: 'DECOMMISSION_SQL_SERVER_ASSET',
+    reason: `Server asset ${removedName} decommissioned and removed from monitored inventory.`,
+    safetyLevel: 'AMBER',
+    approvalBy: 'DBA_OPERATOR',
+    beforeState: `Active monitored state: ${existing.healthScore}/100`,
+    afterState: 'Decommissioned from estate inventory',
+    validation: 'Telemetry polling terminated and DMV cache cleared',
+    status: 'SUCCESS',
+  });
+
+  return { removedId, removedName };
+}
+
+/**
+ * Purge all mock/simulated servers, keeping only real connected servers
+ */
+function clearAllMockServers() {
+  const mockServers = estateServers.filter((s: any) => 
+    s.telemetryMode === 'simulated' || 
+    ['sql-prod-01', 'sql-prod-02', 'sql-prod-03'].includes(s.id)
+  );
+
+  const removedNames: string[] = [];
+  mockServers.forEach((s: any) => {
+    const res = removeServerById(s.id);
+    if (res) removedNames.push(res.removedName);
+  });
+
+  return removedNames;
+}
 
 const MASTER_SYSTEM_INSTRUCTION = `
 You are AI DBA Command Center, an enterprise-grade autonomous database operations and performance intelligence agent.
@@ -1740,49 +1854,64 @@ app.post('/api/dba/servers', async (req, res) => {
 });
 
 // Real-Time Telemetry Push Ingestion Endpoint
-// Allows local PowerShell, Python, or bash agents on SQL Server machines to stream live metrics
+// Allows local PowerShell, Python, curl, or bash agents on SQL Server machines to stream live metrics
 app.post('/api/dba/telemetry/push', (req, res) => {
   try {
-    const { 
-      serverId, 
-      serverName, 
-      token, 
-      cpuUsagePct, 
-      osCpuUsagePct,
-      pageLifeExpectancySec,
-      activeConnections,
-      blockedSessionsCount,
-      avgReadLatencyMs,
-      avgWriteLatencyMs,
-      waitStats,
-      blockingSessions,
-      databases,
-      storageVolumes
-    } = req.body;
+    let payload = req.body;
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (_) {}
+    } else if (payload && typeof payload === 'object') {
+      const keys = Object.keys(payload);
+      if (keys.length === 1 && keys[0].trim().startsWith('{') && keys[0].trim().endsWith('}')) {
+        try {
+          payload = JSON.parse(keys[0]);
+        } catch (_) {}
+      }
+    }
+    payload = payload || {};
 
-    if (!serverId) {
-      return res.status(400).json({ error: 'Missing required field: serverId' });
+    const serverId = payload.serverId || req.query.serverId || payload.id;
+    const serverName = payload.serverName || req.query.serverName || payload.name;
+    const token = payload.token || req.headers['x-agent-token'] || req.query.token;
+    const cpuUsagePct = payload.cpuUsagePct;
+    const osCpuUsagePct = payload.osCpuUsagePct;
+    const pageLifeExpectancySec = payload.pageLifeExpectancySec;
+    const activeConnections = payload.activeConnections;
+    const blockedSessionsCount = payload.blockedSessionsCount;
+    const avgReadLatencyMs = payload.avgReadLatencyMs;
+    const avgWriteLatencyMs = payload.avgWriteLatencyMs;
+    const waitStats = payload.waitStats;
+    const blockingSessions = payload.blockingSessions;
+    const databases = payload.databases;
+    const storageVolumes = payload.storageVolumes;
+
+    const lookupKey = serverId || serverName;
+    if (!lookupKey) {
+      return res.status(400).json({ error: 'Missing required field: serverId or serverName' });
     }
 
-    let targetServer = estateServers.find((s: any) => s.id === serverId || s.name.toUpperCase() === String(serverId).toUpperCase());
+    let targetServer = estateServers.find((s: any) => matchServer(s, String(lookupKey), serverName ? String(serverName) : undefined));
 
     // If server does not exist yet, automatically auto-provision it in real time
     if (!targetServer) {
       const cleanName = (serverName || serverId).toUpperCase().replace(/[^A-Z0-9-]/g, '');
+      const cleanId = cleanName.toLowerCase().startsWith('sql-') ? cleanName.toLowerCase() : `sql-${cleanName.toLowerCase()}`;
       targetServer = {
-        id: serverId,
-        name: cleanName,
+        id: cleanId,
+        name: cleanName.startsWith('SQL-') ? cleanName : `SQL-${cleanName}`,
         role: 'Live Monitored Workload',
         environment: 'production',
         os: 'Windows Server / Linux Host',
-        version: 'Microsoft SQL Server (Live Agent)',
+        version: 'Microsoft SQL Server (Live Push Agent)',
         edition: 'SQL Server Standard/Enterprise',
         cpuCores: 16,
-        cpuUsagePct: cpuUsagePct ?? 25,
-        osCpuUsagePct: osCpuUsagePct ?? 30,
+        cpuUsagePct: cpuUsagePct !== undefined ? Number(cpuUsagePct) : 25,
+        osCpuUsagePct: osCpuUsagePct !== undefined ? Number(osCpuUsagePct) : 30,
         memoryTotalGB: 128,
         memoryUsedGB: 64,
-        pageLifeExpectancySec: pageLifeExpectancySec ?? 1500,
+        pageLifeExpectancySec: pageLifeExpectancySec !== undefined ? Number(pageLifeExpectancySec) : 1500,
         targetServerMemoryGB: 110,
         totalServerMemoryGB: 64,
         healthScore: 98,
@@ -1790,10 +1919,10 @@ app.post('/api/dba/telemetry/push', (req, res) => {
         storageStatus: 'normal',
         diskFreePct: 45,
         daysTo80PctDisk: 180,
-        avgReadLatencyMs: avgReadLatencyMs ?? 2.0,
-        avgWriteLatencyMs: avgWriteLatencyMs ?? 1.5,
-        activeConnections: activeConnections ?? 30,
-        blockedSessionsCount: blockedSessionsCount ?? 0,
+        avgReadLatencyMs: avgReadLatencyMs !== undefined ? Number(avgReadLatencyMs) : 2.0,
+        avgWriteLatencyMs: avgWriteLatencyMs !== undefined ? Number(avgWriteLatencyMs) : 1.5,
+        activeConnections: activeConnections !== undefined ? Number(activeConnections) : 30,
+        blockedSessionsCount: blockedSessionsCount !== undefined ? Number(blockedSessionsCount) : 0,
         deadlocksLast24h: 0,
         alwaysOnStatus: 'not-applicable',
         lastFullBackupHoursAgo: 2,
@@ -1801,7 +1930,7 @@ app.post('/api/dba/telemetry/push', (req, res) => {
         databases: [
           {
             name: 'ProductionDB',
-            serverId,
+            serverId: cleanId,
             owner: 'Database Administration',
             application: 'Enterprise Live Service',
             criticality: 'Tier 1 - Mission Critical',
@@ -1825,6 +1954,13 @@ app.post('/api/dba/telemetry/push', (req, res) => {
         lastHeartbeat: new Date().toISOString(),
       };
       estateServers.push(targetServer);
+
+      liveServerConfigs.set(targetServer.id, {
+        serverId: targetServer.id,
+        serverName: targetServer.name,
+        mode: 'push-agent',
+        token: String(token || 'tok_live_agent'),
+      });
     }
 
     // Update real-time metrics
@@ -1975,9 +2111,14 @@ app.post('/api/dba/telemetry/push', (req, res) => {
       success: true,
       serverId: targetServer.id,
       serverName: targetServer.name,
+      telemetryMode: targetServer.telemetryMode,
       healthScore: targetServer.healthScore,
+      cpuUsagePct: targetServer.cpuUsagePct,
+      pageLifeExpectancySec: targetServer.pageLifeExpectancySec,
+      activeConnections: targetServer.activeConnections,
+      blockedSessionsCount: targetServer.blockedSessionsCount,
       timestamp: targetServer.lastHeartbeat,
-      message: 'Real-time telemetry packet processed successfully',
+      message: `Real-time telemetry packet processed successfully for ${targetServer.name}`,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -2084,6 +2225,109 @@ app.post('/api/dba/servers/:id/refresh', async (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Decommission / Remove SQL Server Asset (Remotely or via Console)
+app.delete('/api/dba/servers/:id', (req, res) => {
+  try {
+    const targetId = req.params.id;
+    const result = removeServerById(targetId);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `Server asset '${targetId}' not found in estate inventory.` });
+    }
+
+    return res.json({
+      success: true,
+      removedServerId: result.removedId,
+      removedServerName: result.removedName,
+      servers: estateServers,
+      storageBaselines: estateStorageBaselines,
+      auditLogs: estateAuditLogs,
+      message: `SQL Server asset ${result.removedName} (${result.removedId}) successfully decommissioned and removed from estate inventory.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Also support POST /api/dba/servers/:id/delete for clients or tools that don't issue HTTP DELETE
+app.post('/api/dba/servers/:id/delete', (req, res) => {
+  try {
+    const targetId = req.params.id;
+    const result = removeServerById(targetId);
+    if (!result) {
+      return res.status(404).json({ success: false, error: `Server asset '${targetId}' not found in estate inventory.` });
+    }
+
+    return res.json({
+      success: true,
+      removedServerId: result.removedId,
+      removedServerName: result.removedName,
+      servers: estateServers,
+      storageBaselines: estateStorageBaselines,
+      auditLogs: estateAuditLogs,
+      message: `SQL Server asset ${result.removedName} (${result.removedId}) successfully decommissioned and removed from estate inventory.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk Purge / Clear Mock Servers Remotely or via Console
+app.post('/api/dba/servers/clear-mock', (req, res) => {
+  try {
+    const removedNames = clearAllMockServers();
+    return res.json({
+      success: true,
+      removedCount: removedNames.length,
+      removedNames,
+      servers: estateServers,
+      storageBaselines: estateStorageBaselines,
+      auditLogs: estateAuditLogs,
+      message: `Purged ${removedNames.length} mock/simulated server(s) (${removedNames.join(', ') || 'none'}). Real live monitored servers retained intact.`,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Generic DELETE /api/dba/servers (handles ?mode=mock or { id } in body)
+app.delete('/api/dba/servers', (req, res) => {
+  try {
+    if (req.query.mode === 'mock' || req.query.mock === 'true') {
+      const removedNames = clearAllMockServers();
+      return res.json({
+        success: true,
+        removedCount: removedNames.length,
+        removedNames,
+        servers: estateServers,
+        storageBaselines: estateStorageBaselines,
+        auditLogs: estateAuditLogs,
+        message: `Purged ${removedNames.length} mock/simulated server(s).`,
+      });
+    }
+
+    const targetId = req.body?.id || req.body?.serverId || req.query.id;
+    if (targetId) {
+      const result = removeServerById(String(targetId));
+      if (!result) {
+        return res.status(404).json({ success: false, error: `Server asset '${targetId}' not found.` });
+      }
+      return res.json({
+        success: true,
+        removedServerId: result.removedId,
+        removedServerName: result.removedName,
+        servers: estateServers,
+        storageBaselines: estateStorageBaselines,
+        auditLogs: estateAuditLogs,
+        message: `SQL Server asset ${result.removedName} removed.`,
+      });
+    }
+
+    return res.status(400).json({ error: 'Missing target server id or mode=mock' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

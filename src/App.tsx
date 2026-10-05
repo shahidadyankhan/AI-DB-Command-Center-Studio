@@ -177,6 +177,49 @@ export default function App() {
     setSelectedServerForDetail(newServer);
   };
 
+  const handleRemoveServer = async (serverId: string): Promise<boolean> => {
+    try {
+      const res = await fetch(`/api/dba/servers/${encodeURIComponent(serverId)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.servers) setServers(data.servers);
+        if (data.storageBaselines) setStorageBaselines(data.storageBaselines);
+        if (data.auditLogs) setAuditLogs(data.auditLogs);
+        setSelectedServerForDetail(prev => prev && prev.id === serverId ? null : prev);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('Failed to remove server:', err);
+      return false;
+    }
+  };
+
+  const handleClearMockServers = async (): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/dba/servers/clear-mock', {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.servers) setServers(data.servers);
+        if (data.storageBaselines) setStorageBaselines(data.storageBaselines);
+        if (data.auditLogs) setAuditLogs(data.auditLogs);
+        setSelectedServerForDetail(prev => {
+          if (!prev) return null;
+          return data.servers.some((s: any) => s.id === prev.id) ? prev : null;
+        });
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.error('Failed to clear mock servers:', err);
+      return false;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-cyan-500/30 selection:text-cyan-200">
       
@@ -218,6 +261,8 @@ export default function App() {
             }}
             onRequestApproval={(rec) => setSelectedRecForApproval(rec)}
             onOpenAddServer={() => setIsAddServerOpen(true)}
+            onRemoveServer={handleRemoveServer}
+            onClearMockServers={handleClearMockServers}
           />
         )}
 
@@ -229,6 +274,8 @@ export default function App() {
             queryRegressions={queryRegressions}
             onRequestApproval={(rec) => setSelectedRecForApproval(rec)}
             onOpenAddServer={() => setIsAddServerOpen(true)}
+            onRemoveServer={handleRemoveServer}
+            onClearMockServers={handleClearMockServers}
           />
         )}
 
@@ -338,6 +385,7 @@ export default function App() {
       <ServerDetailModal
         server={selectedServerForDetail}
         onClose={() => setSelectedServerForDetail(null)}
+        onRemoveServer={handleRemoveServer}
         onServerUpdated={(updated) => {
           setServers(prev => prev.map(s => s.id === updated.id ? updated : s));
           setSelectedServerForDetail(updated);

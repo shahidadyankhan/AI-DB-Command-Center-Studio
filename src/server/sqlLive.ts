@@ -40,8 +40,15 @@ export interface LiveTelemetrySnapshot {
   }>;
 }
 
+export type LiveServerConfig = Partial<DirectSqlConnectionConfig> & {
+  serverId?: string;
+  serverName?: string;
+  mode: 'direct-tds' | 'push-agent' | 'simulated';
+  token: string;
+};
+
 // In-memory store of registered live connection configurations & push tokens
-export const liveServerConfigs = new Map<string, DirectSqlConnectionConfig & { mode: 'direct-tds' | 'push-agent' | 'simulated'; token: string }>();
+export const liveServerConfigs = new Map<string, LiveServerConfig>();
 
 /**
  * Perform a real TDS network connection and DMV metadata discovery against a real SQL Server.
@@ -554,7 +561,8 @@ export async function testDirectSqlConnection(config: DirectSqlConnectionConfig)
 /**
  * Poll live telemetry snapshot from a direct-connected SQL Server
  */
-export async function fetchLiveDirectTelemetry(config: DirectSqlConnectionConfig): Promise<LiveTelemetrySnapshot | null> {
+export async function fetchLiveDirectTelemetry(config: LiveServerConfig): Promise<LiveTelemetrySnapshot | null> {
+  if (!config.serverAddress) return null;
   const host = config.serverAddress.trim();
   const port = Number(config.port) || 1433;
   const user = config.username?.trim() || 'sa';
@@ -840,6 +848,13 @@ export function generateCollectorScript(params: {
 # Run directly in PowerShell 5.1+ or PowerShell 7 (x64) on the SQL Server machine
 # No external modules required. Uses standard .NET System.Data.SqlClient.
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+try {
+    if ([System.Net.ServicePointManager]::ServerCertificateValidationCallback -eq $null) {
+        [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+    }
+} catch {}
+
 $ServerInstance = "localhost"  # Or your instance name, e.g., "localhost\\SQL2022"
 $Database       = "master"
 $ApiEndpoint    = "${apiEndpoint}"
@@ -1051,12 +1066,16 @@ while ($true) {
     if ($snapshot) {
         $json = $snapshot | ConvertTo-Json -Depth 5
         try {
-            $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Body $json -ContentType "application/json" -TimeoutSec 5
+            $headers = @{
+                "Content-Type"  = "application/json"
+                "X-Agent-Token" = $AuthToken
+            }
+            $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Body $json -Headers $headers -TimeoutSec 10
             $timeStr = (Get-Date).ToString("HH:mm:ss")
             Write-Host "[$timeStr]  Pushed Telemetry -> CPU: $($snapshot.cpuUsagePct)% | PLE: $($snapshot.pageLifeExpectancySec)s | Sessions: $($snapshot.activeConnections) | Blocked: $($snapshot.blockedSessionsCount) | OK" -ForegroundColor Green
         }
         catch {
-            Write-Host "Failed to push to Command Center: $_" -ForegroundColor Red
+            Write-Host "Failed to push to Command Center: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
     Start-Sleep -Seconds $IntervalSec
