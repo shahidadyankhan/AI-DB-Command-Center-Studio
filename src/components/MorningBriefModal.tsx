@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Sun, 
   X, 
@@ -29,6 +29,10 @@ export const MorningBriefModal: React.FC<MorningBriefModalProps> = ({
 }) => {
   const [activeBrief, setActiveBrief] = useState<MorningBriefing>(briefing);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  useEffect(() => {
+    setActiveBrief(briefing);
+  }, [briefing]);
 
   if (!isOpen) return null;
 

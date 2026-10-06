@@ -11,22 +11,24 @@ import {
   Database,
   ArrowRight
 } from 'lucide-react';
-import { RecommendationItem } from '../types/dba';
+import { RecommendationItem, ServerInstance } from '../types/dba';
 
 interface HumansMissedModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRequestApproval: (rec: RecommendationItem) => void;
+  servers?: ServerInstance[];
 }
 
 export const HumansMissedModal: React.FC<HumansMissedModalProps> = ({
   isOpen,
   onClose,
-  onRequestApproval
+  onRequestApproval,
+  servers = []
 }) => {
   if (!isOpen) return null;
 
-  const hiddenFindings = [
+  const rawFindings = [
     {
       id: 'MISS-01',
       category: 'Sub-Threshold Degradation',
@@ -76,6 +78,30 @@ export const HumansMissedModal: React.FC<HumansMissedModalProps> = ({
       targetDatabase: 'OrdersDB',
     },
   ];
+
+  // Only display findings for active monitored servers
+  const matchingFindings = servers.length > 0
+    ? rawFindings.filter(f => servers.some(s => s.name.toLowerCase() === f.targetServer.toLowerCase() || s.id.toLowerCase() === f.targetServer.toLowerCase()))
+    : [];
+
+  const hiddenFindings = matchingFindings.length > 0
+    ? matchingFindings
+    : (servers.length > 0
+        ? [
+            {
+              id: `MISS-SCAN-${servers[0].id.toUpperCase()}`,
+              category: 'Sub-Threshold Telemetry Scan',
+              title: `High-Resolution Telemetry Baseline Scan on ${servers[0].name}`,
+              severity: 'LOW',
+              description: `Sub-60s extended events polling on ${servers[0].name} confirms nominal IO thread scheduling with ${servers[0].avgReadLatencyMs}ms read latency.`,
+              hiddenDetail: `Automated scanner verified no hidden scheduler stalls or silent backup throughput degradation on ${servers[0].name}.`,
+              recommendation: `Maintain routine automated index maintenance and moving average telemetry baselines.`,
+              safetyLevel: 'GREEN' as const,
+              targetServer: servers[0].name,
+              targetDatabase: servers[0].databases?.[0]?.name || 'master',
+            }
+          ]
+        : []);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150">

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Flame, 
   CheckCircle2, 
@@ -9,21 +9,47 @@ import {
   Layers, 
   Check, 
   FileText,
-  TrendingDown
+  TrendingDown,
+  Server
 } from 'lucide-react';
 import { Incident, RecommendationItem } from '../types/dba';
 
 interface IncidentModeProps {
   incidents: Incident[];
   onRequestApproval: (rec: RecommendationItem) => void;
-  onSelectIncident: (inc: Incident) => void;
+  onSelectIncident?: (inc: Incident) => void;
 }
 
 export const IncidentMode: React.FC<IncidentModeProps> = ({
   incidents,
   onRequestApproval
 }) => {
-  const activeIncident = incidents.find(i => i.status === 'ACTIVE') || incidents[0];
+  const activeIncidents = incidents.filter(i => i.status === 'ACTIVE');
+  const [selectedIncidentId, setSelectedIncidentId] = useState<string>(() => {
+    return activeIncidents[0]?.id || incidents[0]?.id || '';
+  });
+
+  useEffect(() => {
+    if (!incidents.some(i => i.id === selectedIncidentId)) {
+      setSelectedIncidentId(activeIncidents[0]?.id || incidents[0]?.id || '');
+    }
+  }, [incidents, selectedIncidentId, activeIncidents]);
+
+  const activeIncident = incidents.find(i => i.id === selectedIncidentId) || activeIncidents[0] || incidents[0];
+
+  if (!activeIncident || incidents.length === 0) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
+        <div className="w-16 h-16 rounded-full bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-center mx-auto text-emerald-400">
+          <CheckCircle2 className="w-8 h-8" />
+        </div>
+        <h3 className="text-xl font-bold text-white">All Monitored Database Systems Healthy</h3>
+        <p className="text-xs text-slate-400 max-w-lg mx-auto leading-relaxed">
+          Zero active P1/P2 incidents detected across monitored instances. Autonomous DBRE monitors sys.dm_os_wait_stats, locking hierarchies, and error logs continuously.
+        </p>
+      </div>
+    );
+  }
 
   const steps = [
     { num: 1, name: 'DETECT', status: 'completed' },
@@ -37,14 +63,45 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
     { num: 9, name: 'DOCUMENT', status: 'pending' },
   ];
 
+  const startTime = activeIncident.startTime || '14:24 UTC';
+  const targetServer = activeIncident.server;
+  const targetDb = activeIncident.database;
+  const rootSpid = activeIncident.rootBlockerSpid || 78;
+
   const timelineEvents = [
-    { time: '14:17 UTC', title: 'Application Release v4.12.0 deployed', detail: 'Deploy pipeline pushed new checkout batch retry worker service to K8S cluster.', type: 'change' },
-    { time: '14:20 UTC', title: 'Ad-hoc Index Creation CHG-8902', detail: 'svc_dba_ops created index on OrderItems without ONLINE=ON, holding brief schema-stability lock.', type: 'change' },
-    { time: '14:24 UTC', title: 'Session SPID 78 opens transaction', detail: 'svc_checkout_worker started BEGIN TRANSACTION and entered SLEEPING state (uncommitted for >340s).', type: 'anomaly' },
-    { time: '14:25 UTC', title: 'First Blocking Cascade begins', detail: 'SPID 112 blocked on Orders partition (LCK_M_X lock).', type: 'anomaly' },
-    { time: '14:28 UTC', title: 'Checkout P99 Latency reaches 3,200ms', detail: '14 downstream sessions blocked. Cart abandonment alerts trigger.', type: 'incident' },
-    { time: '14:32 UTC', title: 'AI DBA Incident Commander INC-4092 created', detail: 'Autonomous detection, lock tree traversal, and correlation completed with 94% confidence.', type: 'agent' },
+    { 
+      time: 'T - 12m', 
+      title: 'Workload Ingestion Phase', 
+      detail: `Concurrent client sessions connected to ${targetServer} (${targetDb}).`, 
+      type: 'change' 
+    },
+    { 
+      time: 'T - 7m', 
+      title: `Session SPID ${rootSpid} Enters Exclusive Transaction`, 
+      detail: `SPID ${rootSpid} acquired exclusive lock on ${targetDb} partition and entered SLEEPING state with open transaction.`, 
+      type: 'anomaly' 
+    },
+    { 
+      time: 'T - 4m', 
+      title: 'Lock Contention Queue Builds', 
+      detail: `Dependent worker threads queued behind SPID ${rootSpid} on LCK_M_X wait type.`, 
+      type: 'anomaly' 
+    },
+    { 
+      time: startTime, 
+      title: `${activeIncident.affectedApplication || 'Service'} Latency Degraded`, 
+      detail: `Observed latency SLA degradation on ${targetServer}. High-severity alert triggered.`, 
+      type: 'incident' 
+    },
+    { 
+      time: 'Just Now', 
+      title: `AI DBA Incident Commander ${activeIncident.id} Activated`, 
+      detail: `Lock hierarchy traversal completed with ${activeIncident.confidencePct || 94}% confidence. Safety containment gate prepared.`, 
+      type: 'agent' 
+    },
   ];
+
+  const containmentSql = (activeIncident as any).suggestedAction?.sqlScript || `KILL ${rootSpid}; -- Safety containment: terminate blocker on ${targetServer}`;
 
   return (
     <div className="space-y-6">
@@ -64,15 +121,36 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${
-            activeIncident.severity === 'CRITICAL' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse' : 'bg-amber-500/20 text-amber-400'
-          }`}>
-            {activeIncident.id} • {activeIncident.severity}
-          </span>
-          <span className="text-xs font-mono text-slate-400">
-            Status: <strong className="text-white">{activeIncident.status}</strong>
-          </span>
+        <div className="flex flex-wrap items-center gap-3">
+          {incidents.length > 1 && (
+            <div className="flex items-center space-x-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+              {incidents.map((inc) => (
+                <button
+                  key={inc.id}
+                  onClick={() => setSelectedIncidentId(inc.id)}
+                  className={`px-2.5 py-1 rounded text-xs font-mono transition cursor-pointer flex items-center space-x-1.5 ${
+                    activeIncident.id === inc.id
+                      ? 'bg-rose-600 text-white font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <span>{inc.id}</span>
+                  <span className="text-[10px] opacity-75">({inc.server})</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center space-x-2">
+            <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${
+              activeIncident.severity === 'CRITICAL' ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 animate-pulse' : 'bg-amber-500/20 text-amber-400'
+            }`}>
+              {activeIncident.id} • {activeIncident.severity}
+            </span>
+            <span className="text-xs font-mono text-slate-400">
+              Status: <strong className="text-white">{activeIncident.status}</strong>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -124,14 +202,14 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
                   {activeIncident.title}
                 </h3>
                 <div className="flex items-center space-x-3 text-xs text-slate-400 mt-1 font-mono">
-                  <span>Server: <strong className="text-cyan-300">{activeIncident.server}</strong></span>
-                  <span>Database: <strong className="text-cyan-300">{activeIncident.database}</strong></span>
-                  <span>Impacted: <strong className="text-slate-200">{activeIncident.affectedApplication}</strong></span>
+                  <span>Server: <strong className="text-cyan-300">{targetServer}</strong></span>
+                  <span>Database: <strong className="text-cyan-300">{targetDb}</strong></span>
+                  <span>Impacted: <strong className="text-slate-200">{activeIncident.affectedApplication || 'Core Database Service'}</strong></span>
                 </div>
               </div>
 
               <span className="text-xs font-mono text-slate-400">
-                Started: <strong className="text-slate-200">{activeIncident.startTime}</strong>
+                Started: <strong className="text-slate-200">{activeIncident.startTime || 'Recently'}</strong>
               </span>
             </div>
 
@@ -142,7 +220,7 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
                 <span>Observed Business & Technical Impact</span>
               </span>
               <p className="text-rose-200/90 leading-relaxed">
-                {activeIncident.businessImpact}
+                {activeIncident.businessImpact || `Elevated transactional latency and thread queue stalls on ${targetServer} (${targetDb}).`}
               </p>
             </div>
 
@@ -151,23 +229,23 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="text-slate-300 font-semibold">Identified Probable Root Cause</span>
                 <span className="text-cyan-400 font-mono font-bold">
-                  Confidence: {activeIncident.confidencePct}% (HIGH)
+                  Confidence: {activeIncident.confidencePct || 92}% (HIGH)
                 </span>
               </div>
               <p className="text-sm font-medium text-slate-100">
-                {activeIncident.rootCauseCandidate}
+                {activeIncident.rootCauseCandidate || `Session SPID ${rootSpid} holding exclusive lock without commit on ${targetDb}.`}
               </p>
-              <div className="text-xs text-slate-400 pt-1 border-t border-slate-800">
-                <strong>DMV Evidence:</strong> SPID {activeIncident.rootBlockerSpid} has held an exclusive LCK_M_X lock on dbo.Orders for &gt;340s.
+              <div className="text-xs text-slate-400 pt-1 border-t border-slate-800 font-mono">
+                <strong>DMV Evidence:</strong> SPID {rootSpid} holds uncommitted transaction in SLEEPING state on {targetDb}; cascading queue detected.
               </div>
             </div>
           </div>
 
-          {/* Incident Timeline Correlation (Section 7 & 10) */}
+          {/* Incident Timeline Correlation */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
             <h4 className="text-base font-bold text-white flex items-center gap-2">
               <Clock className="w-4 h-4 text-cyan-400" />
-              <span>Change Correlation & Event Timeline (Section 7)</span>
+              <span>Change Correlation & Event Timeline</span>
             </h4>
 
             <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-800">
@@ -204,16 +282,16 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
                 RED SAFETY LEVEL
               </span>
               <h4 className="text-base font-bold text-white mt-2 leading-snug">
-                Containment Action: Terminate Root Blocker SPID 78
+                Containment Action: Terminate Blocker SPID {rootSpid}
               </h4>
               <p className="text-xs text-rose-200/90 mt-1">
-                Terminating this idle transaction immediately releases exclusive table locks on dbo.Orders, restoring checkout operations.
+                Terminating this session on <strong className="text-white font-mono">{targetServer}</strong> immediately releases exclusive table locks on {targetDb}, restoring transaction throughput.
               </p>
             </div>
 
             {/* Command Preview */}
             <div className="bg-slate-950 p-2.5 rounded border border-rose-900/60 font-mono text-xs text-rose-300">
-              KILL 78; -- Verified target: SPID 78 svc_checkout_worker
+              {containmentSql}
             </div>
 
             {/* Prerequisites */}
@@ -224,27 +302,27 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
               </div>
               <div className="flex items-center space-x-1.5 text-emerald-400">
                 <Check className="w-3.5 h-3.5" />
-                <span>Rollback: Checkout workers retry via idempotent queue</span>
+                <span>Rollback: Applications retry via idempotent connection pool</span>
               </div>
             </div>
 
             {/* Trigger Button */}
             <button
               onClick={() => onRequestApproval({
-                id: 'REC-001',
-                title: 'Terminate Root Blocker Session SPID 78',
-                why: 'Session 78 has held exclusive LCK_M_X locks on OrdersDB for >340s.',
-                evidence: 'sys.dm_exec_requests shows open_transaction_count = 1, wait_time = 0, status = sleeping.',
-                expectedBenefit: 'Immediate resolution of INC-4092; P99 checkout latency expected to recover within 30 seconds.',
+                id: activeIncident.id,
+                title: `Terminate Root Blocker Session SPID ${rootSpid} on ${targetServer}`,
+                why: `Session ${rootSpid} has held exclusive locks on ${targetDb} without commit.`,
+                evidence: `sys.dm_exec_requests shows open_transaction_count = 1, wait_time = 0, status = sleeping on ${targetServer}.`,
+                expectedBenefit: `Immediate resolution of ${activeIncident.id}; transactional latency recovered within 30 seconds.`,
                 risk: 'HIGH',
                 implementationComplexity: 'LOW',
-                rollbackMethod: 'Worker application will auto-retry order batch.',
+                rollbackMethod: 'Worker application will auto-retry transaction batch.',
                 validationMethod: 'Verify blocked sessions drop to 0.',
                 priority: 'CRITICAL',
                 safetyLevel: 'RED',
-                sqlScript: 'KILL 78; -- Safety verification: SPID 78 svc_checkout_worker',
-                targetServer: 'SQL-PROD-01',
-                targetDatabase: 'OrdersDB',
+                sqlScript: containmentSql,
+                targetServer: targetServer,
+                targetDatabase: targetDb,
               })}
               className="w-full py-2.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-lg shadow-rose-600/40 transition flex items-center justify-center space-x-2 cursor-pointer"
             >
@@ -259,15 +337,15 @@ export const IncidentMode: React.FC<IncidentModeProps> = ({
             <ul className="space-y-2 text-slate-400 text-[11px]">
               <li className="flex items-start space-x-2">
                 <span className="text-cyan-400 font-bold">•</span>
-                <span>Configure <strong>SET XACT_ABORT ON</strong> in checkout worker connection pool to prevent orphaned transactions.</span>
+                <span>Configure <strong>SET XACT_ABORT ON</strong> in connection pools to prevent orphaned open transactions on {targetServer}.</span>
               </li>
               <li className="flex items-start space-x-2">
                 <span className="text-cyan-400 font-bold">•</span>
-                <span>Enforce CI/CD pull request gate requiring <strong>ONLINE = ON</strong> on all production index DDL.</span>
+                <span>Enforce CI/CD pull request gate requiring <strong>ONLINE = ON</strong> on all production DDL.</span>
               </li>
               <li className="flex items-start space-x-2">
                 <span className="text-cyan-400 font-bold">•</span>
-                <span>Set database-level query lock timeout to 15,000ms.</span>
+                <span>Set database-level query lock timeout to 15,000ms on {targetDb}.</span>
               </li>
             </ul>
           </div>

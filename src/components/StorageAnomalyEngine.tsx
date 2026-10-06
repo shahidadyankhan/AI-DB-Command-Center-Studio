@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   HardDrive, 
   TrendingUp, 
@@ -30,10 +30,17 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
   alerts,
   onRequestApproval
 }) => {
-  const [selectedBaselineId, setSelectedBaselineId] = useState<string>(baselines[0]?.id || 'BASE-PROD03-DATA');
+  const [selectedBaselineId, setSelectedBaselineId] = useState<string>(() => baselines[0]?.id || '');
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [aiReport, setAiReport] = useState<any>(null);
   const [copiedScript, setCopiedScript] = useState(false);
+
+  // Sync selectedBaselineId when baselines change or servers are decommissioned
+  useEffect(() => {
+    if (!baselines.some(b => b.id === selectedBaselineId) && baselines.length > 0) {
+      setSelectedBaselineId(baselines[0].id);
+    }
+  }, [baselines, selectedBaselineId]);
 
   // Fallback cleanly to matching id, or matching serverId/serverName, or latest/first baseline
   const currentBaseline = baselines.find(b => b.id === selectedBaselineId) 
@@ -144,7 +151,7 @@ export const StorageAnomalyEngine: React.FC<StorageAnomalyEngineProps> = ({
       <div className="flex items-center space-x-2 overflow-x-auto pb-1 no-scrollbar">
         {baselines.map((b) => {
           const isSelected = selectedBaselineId === b.id || currentBaseline?.id === b.id;
-          const isLiveInstance = b.id.includes('SQL-') && !['BASE-PROD03-DATA', 'BASE-PROD01-DATA', 'BASE-PROD02-DATA'].includes(b.id);
+          const isLiveInstance = Boolean((b as any).isRealTime || !b.id?.includes('BASE-PROD0') || b.id?.includes('CUSTOM'));
 
           return (
             <button

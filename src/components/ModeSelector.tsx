@@ -14,13 +14,19 @@ import { OperatingMode } from '../types/dba';
 interface ModeSelectorProps {
   currentMode: OperatingMode;
   onSelectMode: (mode: OperatingMode) => void;
-  activeIncidentCount: number;
+  activeIncidentCount?: number;
+  storageAnomalyCount?: number;
+  queryRegressionCount?: number;
+  predictiveRiskCount?: number;
 }
 
 export const ModeSelector: React.FC<ModeSelectorProps> = ({
   currentMode,
   onSelectMode,
-  activeIncidentCount
+  activeIncidentCount = 0,
+  storageAnomalyCount = 0,
+  queryRegressionCount = 0,
+  predictiveRiskCount = 0,
 }) => {
   const modes: Array<{
     id: OperatingMode;
@@ -55,7 +61,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       label: 'Storage Anomaly Engine',
       sublabel: 'Baselines & 80/90/100%',
       icon: <HardDrive className="w-4 h-4" />,
-      badge: '+207% Spike',
+      badge: storageAnomalyCount > 0 ? `${storageAnomalyCount} Anomaly` : undefined,
       badgeColor: 'bg-rose-500/30 text-rose-300 border border-rose-500/40',
     },
     {
@@ -63,7 +69,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       label: 'Query Regression Checker',
       sublabel: 'Workloads & Plan Diffs',
       icon: <Zap className="w-4 h-4" />,
-      badge: '+1994% Plan',
+      badge: queryRegressionCount > 0 ? `${queryRegressionCount} Plan Diff` : undefined,
       badgeColor: 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/40',
     },
     {
@@ -77,7 +83,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
       label: 'Mode E: Predictive',
       sublabel: 'Capacity & Bottlenecks',
       icon: <LineChart className="w-4 h-4" />,
-      badge: '61d Alert',
+      badge: predictiveRiskCount > 0 ? `${predictiveRiskCount} At Risk` : undefined,
       badgeColor: 'bg-amber-500/30 text-amber-300 border border-amber-500/40',
     },
     {

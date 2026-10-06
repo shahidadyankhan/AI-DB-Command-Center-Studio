@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ResponsiveContainer, 
   ComposedChart, 
@@ -43,11 +43,18 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
   }, [baselines]);
 
   const [selectedId, setSelectedId] = useState<string>(
-    atRiskBaselines[0]?.id || baselines[0]?.id || 'BASE-PROD03-DATA'
+    () => atRiskBaselines[0]?.id || baselines[0]?.id || ''
   );
   const [metricUnit, setMetricUnit] = useState<'GB' | 'PCT'>('GB');
   const [simulateRemediation, setSimulateRemediation] = useState(false);
   const [projectionDays, setProjectionDays] = useState<30 | 60 | 90>(60);
+
+  // Sync selectedId with active baselines
+  useEffect(() => {
+    if (!baselines.some(b => b.id === selectedId) && baselines.length > 0) {
+      setSelectedId(atRiskBaselines[0]?.id || baselines[0]?.id || '');
+    }
+  }, [baselines, selectedId, atRiskBaselines]);
 
   const activeBaseline = useMemo(() => {
     return baselines.find(b => b.id === selectedId) || atRiskBaselines[0] || baselines[0];
@@ -102,7 +109,7 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
     const surgeDaily = activeBaseline.currentDailyGrowthGB || 0;
     const baseDaily = activeBaseline.baselineDailyGrowthGB || 0;
     const remediatedDaily = Math.min(baseDaily, 10.0); // If compressed/purged
-    const immediateReclaim = activeBaseline.id === 'BASE-PROD03-DATA' ? 920 : 350; // Reclaim potential
+    const immediateReclaim = Math.max(50, Math.round(todayUsed * 0.22)); // Dynamic ~22% reclaim potential via compression/purge
 
     const forecastSteps = [
       { days: 7, label: '+7 Days' },
@@ -129,10 +136,12 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
       const confLow = Math.max(todayUsed, projGB * 0.94);
 
       let milestone: string | undefined = undefined;
-      if (step.days === 28 && activeBaseline.id === 'BASE-PROD03-DATA') {
+      if (activeBaseline.daysTo100Pct && Math.abs(step.days - activeBaseline.daysTo100Pct) <= 7) {
         milestone = '100% Full (Outage Point)';
-      } else if (step.days === 14 && activeBaseline.id === 'BASE-PROD03-DATA') {
+      } else if (activeBaseline.daysTo90Pct && Math.abs(step.days - activeBaseline.daysTo90Pct) <= 5) {
         milestone = '90% Severe Exhaustion';
+      } else if (activeBaseline.daysTo80Pct && Math.abs(step.days - activeBaseline.daysTo80Pct) <= 3) {
+        milestone = '80% Advisory Threshold';
       }
 
       data.push({
@@ -154,7 +163,19 @@ export const StorageExhaustionTimeline: React.FC<StorageExhaustionTimelineProps>
     return data;
   }, [activeBaseline, projectionDays]);
 
-  const totalCapacity = activeBaseline?.totalCapacityGB || 5000;
+  if (!activeBaseline || baselines.length === 0) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 space-y-2">
+        <HardDrive className="w-10 h-10 mx-auto text-slate-600 mb-2" />
+        <h4 className="text-base font-bold text-white">All Monitored Storage Baselines Nominal</h4>
+        <p className="text-xs text-slate-400 max-w-md mx-auto">
+          No storage volumes currently exceeding anomaly thresholds or critical runway limits.
+        </p>
+      </div>
+    );
+  }
+
+  const totalCapacity = activeBaseline.totalCapacityGB || 5000;
   const val80 = metricUnit === 'GB' ? totalCapacity * 0.8 : 80;
   const val90 = metricUnit === 'GB' ? totalCapacity * 0.9 : 90;
   const val100 = metricUnit === 'GB' ? totalCapacity : 100;

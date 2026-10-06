@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Zap, 
   TrendingDown, 
@@ -28,11 +28,18 @@ export const QueryRegressionChecker: React.FC<QueryRegressionCheckerProps> = ({
   regressions,
   onRequestApproval
 }) => {
-  const [selectedQueryId, setSelectedQueryId] = useState<number>(regressions[0]?.queryId || 41829);
+  const [selectedQueryId, setSelectedQueryId] = useState<number>(() => regressions[0]?.queryId || 0);
   const [selectedPeriod, setSelectedPeriod] = useState<string>('ALL');
   const [isAiAnalyzing, setIsAiAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
   const [copiedQueryId, setCopiedQueryId] = useState<number | null>(null);
+
+  // Sync selectedQueryId when regressions change or servers are decommissioned
+  useEffect(() => {
+    if (!regressions.some(q => q.queryId === selectedQueryId) && regressions.length > 0) {
+      setSelectedQueryId(regressions[0].queryId);
+    }
+  }, [regressions, selectedQueryId]);
 
   const periods = ['ALL', 'Business Hours Peak', 'Checkout Rush (12-2pm)', 'Nightly ETL Batch'];
 
@@ -40,7 +47,19 @@ export const QueryRegressionChecker: React.FC<QueryRegressionCheckerProps> = ({
     ? regressions
     : regressions.filter(q => q.workloadPeriod.includes(selectedPeriod));
 
-  const currentQuery = regressions.find(q => q.queryId === selectedQueryId) || regressions[0];
+  const currentQuery = regressions.find(q => q.queryId === selectedQueryId) || filteredRegressions[0] || regressions[0];
+
+  if (!currentQuery || regressions.length === 0) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
+        <Zap className="w-12 h-12 mx-auto text-slate-600" />
+        <h3 className="text-xl font-bold text-white">No Active Query Regressions Detected</h3>
+        <p className="text-xs text-slate-400 max-w-md mx-auto">
+          Query Store execution plans and CPU/duration distributions are within established runtime variance across monitored database workloads.
+        </p>
+      </div>
+    );
+  }
 
   const handleAiDissection = async () => {
     setIsAiAnalyzing(true);
